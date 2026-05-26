@@ -78,7 +78,7 @@ if uploaded_file is not None:
         else: num_hari = 29 if thn_depan % 4 == 0 else 28
         
         hari_pertama_idx = date_bulan_depan.weekday()
-        nama_hari_format = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu']
+        nama_hari_format = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sattu', 'Minggu']
         hari_ke_nama = [nama_hari_format[(hari_pertama_idx + d) % 7] for d in range(num_hari)]
         
         st.success(f"Berhasil membaca data! Menyiapkan jadwal otomatis untuk Bulan: **{date_bulan_depan.strftime('%B %Y')}** ({num_hari} Hari).")
@@ -104,7 +104,7 @@ if uploaded_file is not None:
 
                 for i in range(num_karyawan):
                     for d in range(num_hari):
-                        if i == 0: # Jasmine hanya boleh Shift 1, Shift 2, atau OFF
+                        if i == 0:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2]), f'x_{i}_{d}')
                         else:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2, 3]), f'x_{i}_{d}')
@@ -120,28 +120,62 @@ if uploaded_file is not None:
                         is_off_days.append(is_off)
                     model.Add(sum(is_off_days) == total_off_wajib)
 
-                # Ketentuan 3: Libur Mingguan Kalender (Senin-Minggu) Wajib 2-3 Hari
-                minggu_list = []
+                # =====================================================================
+                # PERBAIKAN LOGIKA MINGGUAN: MENYATUKAN SAMBUNGAN MINGGU BULAN LALU
+                # =====================================================================
+                # Kita petakan hari OFF riil dari 7 hari terakhir bulan lalu
+                riwayat_off_bulan_lalu = {}
+                for i in range(num_karyawan):
+                    riwayat_off_bulan_lalu[i] = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i]]
+
+                # Kita hitung berapa hari bulan lalu yang masuk ke dalam potongan minggu pertama bulan ini
+                # Contoh: jika hari pertama bulan ini Rabu (indeks 2), berarti ada Senin & Selasa (2 hari) milik bulan lalu
+                jumlah_hari_bulan_lalu_di_minggu_awal = hari_pertama_idx
+
+                # Mulai susun batasan libur mingguan kalender (wajib 2-3 hari per minggu penuh)
+                # Minggu pertama digabung dengan data riil akhir bulan lalu agar adil dan tidak bentrok
                 current_week = []
                 for d in range(num_hari):
                     current_week.append(d)
                     if hari_ke_nama[d] == 'Minggu' or d == num_hari - 1:
+                        # Jika ini adalah minggu pertama dan memiliki sambungan dari bulan lalu
+                        if len(minggu_list) == 0 and jumlah_hari_bulan_lalu_di_minggu_awal > 0:
+                            for i in range(num_karyawan):
+                                is_off_week = []
+                                # Ambil status libur riil dari hari-hari terakhir bulan lalu
+                                tgl_ambil_bulan_lalu = riwayat_off_bulan_lalu[i][-jumlah_hari_bulan_lalu_di_minggu_awal:]
+                                total_off_bulan_lalu = sum(tgl_ambil_bulan_lalu)
+                                
+                                # Tambahkan variabel penanda libur untuk tanggal-tanggal di bulan baru
+                                for d_new in current_week:
+                                    is_off = model.NewBoolVar(f'is_off_w1_{i}_{d_new}')
+                                    model.Add(x[i, d_new] == 0).OnlyEnforceIf(is_off)
+                                    model.Add(x[i, d_new] != 0).OnlyEnforceIf(is_off.Not())
+                                    is_off_week.append(is_off)
+                                
+                                # Batasan: (Libur di akhir bulan lalu) + (Libur di awal bulan ini) WAJIB 2-3 Hari
+                                model.Add(total_off_bulan_lalu + sum(is_off_week) >= 2)
+                                model.Add(total_off_bulan_lalu + sum(is_off_week) <= 3)
+                        else:
+                            # Untuk minggu-minggu reguler di tengah bulan
+                            for i in range(num_karyawan):
+                                is_off_week = []
+                                for d_new in current_week:
+                                    is_off = model.NewBoolVar(f'is_off_reg_{i}_{d_new}')
+                                    model.Add(x[i, d_new] == 0).OnlyEnforceIf(is_off)
+                                    model.Add(x[i, d_new] != 0).OnlyEnforceIf(is_off.Not())
+                                    is_off_week.append(is_off)
+                                
+                                if len(current_week) == 7:
+                                    model.Add(sum(is_off_week) >= 2)
+                                    model.Add(sum(is_off_week) <= 3)
+                                else:
+                                    # Sisa hari di akhir bulan (jika kurang dari 5 hari boleh <= 2 hari libur)
+                                    model.Add(sum(is_off_week) <= 2)
+                        
+                        # Tandai bahwa minggu ini sudah diproses, reset penampung
                         minggu_list.append(current_week)
                         current_week = []
-
-                for i in range(num_karyawan):
-                    for minggu in minggu_list:
-                        is_off_week = []
-                        for d in minggu:
-                            is_off = model.NewBoolVar(f'is_off_w_{i}_{d}')
-                            model.Add(x[i, d] == 0).OnlyEnforceIf(is_off)
-                            model.Add(x[i, d] != 0).OnlyEnforceIf(is_off.Not())
-                            is_off_week.append(is_off)
-                        if len(minggu) >= 5:
-                            model.Add(sum(is_off_week) >= 2)
-                            model.Add(sum(is_off_week) <= 3)
-                        else:
-                            model.Add(sum(is_off_week) <= 2)
 
                 # Ketentuan 4: Shift 3 Wajib Tepat Berdua. Shift 1 & 2 boleh 1-2 orang.
                 for d in range(num_hari):
@@ -191,9 +225,7 @@ if uploaded_file is not None:
                         window = juni_offs[start_day : start_day + 6]
                         model.Add(sum(window) >= 1)
 
-                # =====================================================================
-                # LOGIKA BARU: KUNCI AGAR SAUT PARSAULIAN DOMINAN DI SHIFT 1
-                # =====================================================================
+                # Kunci Agar Saut Parsaulian Dominan di Shift 1 (11 - 14 Hari)
                 for i in range(num_karyawan):
                     emp_s1_days = []
                     for d in range(num_hari):
@@ -202,18 +234,16 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 1).OnlyEnforceIf(is_s1.Not())
                         emp_s1_days.append(is_s1)
                     
-                    # Jika karyawan ini adalah Saut Parsaulian, paksa Shift 1 dominan (antara 11 sampai 14 hari)
                     if i == saut_idx and saut_idx != -1:
                         model.Add(sum(emp_s1_days) >= 11)
                         model.Add(sum(emp_s1_days) <= 14)
                     else:
-                        # Karyawan lain porsi Shift 1 nya dibuat wajar (antara 2 sampai 8 hari) agar rata
                         model.Add(sum(emp_s1_days) >= 2)
                         model.Add(sum(emp_s1_days) <= 8)
 
-                # Distribusi Adil S3 (Shift Malam) bagi karyawan lain agar merata
+                # Distribusi Adil Shift 3 (Malam)
                 for i in range(num_karyawan):
-                    if i != 0: # Di luar Jasmine
+                    if i != 0:
                         emp_s3_days = []
                         for d in range(num_hari):
                             is_s3 = model.NewBoolVar(f'fair_s3_i_{i}_d_{d}')
@@ -222,11 +252,9 @@ if uploaded_file is not None:
                             emp_s3_days.append(is_s3)
                         
                         if i == saut_idx:
-                            # Karena Saut fokus di Shift 1, jatah Shift 3 Saut diturunkan (antara 2 s.d 5 hari)
                             model.Add(sum(emp_s3_days) >= 2)
                             model.Add(sum(emp_s3_days) <= 5)
                         else:
-                            # Rekan lain membagi slot Shift 3 secara adil (antara 9 s.d 12 hari)
                             model.Add(sum(emp_s3_days) >= 9)
                             model.Add(sum(emp_s3_days) <= 12)
 
