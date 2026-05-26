@@ -46,8 +46,12 @@ def baca_riwayat_bulan_lalu(uploaded_file):
             riwayat_weekly[emp_idx] = raw_shifts
             emp_idx += 1
             
-    bulan_lalu_str = str(df.iloc[0, 0]).strip()
-    date_bulan_lalu = datetime.datetime.strptime(bulan_lalu_str, "%Y-%m-%d")
+    # Mengubah pembacaan sel A1 agar kebal terhadap sisa data jam (00:00:00)
+    bulan_lalu_raw = str(df.iloc[0, 0]).strip()
+    if " " in bulan_lalu_raw:
+        bulan_lalu_raw = bulan_lalu_raw.split(" ")[0]
+        
+    date_bulan_lalu = datetime.datetime.strptime(bulan_lalu_raw, "%Y-%m-%d")
     
     return karyawan_list, riwayat_weekly, date_bulan_lalu
 
@@ -61,6 +65,7 @@ if uploaded_file is not None:
         karyawan, riwayat_mei_seminggu, date_bulan_lalu = baca_riwayat_bulan_lalu(uploaded_file)
         num_karyawan = len(karyawan)
         
+        # Hitung bulan depan secara otomatis
         if date_bulan_lalu.month == 12:
             thn_depan = date_bulan_lalu.year + 1
             bln_depan = 1
@@ -70,10 +75,12 @@ if uploaded_file is not None:
             
         date_bulan_depan = datetime.date(thn_depan, bln_depan, 1)
         
+        # Hitung jumlah hari di bulan depan
         if bln_depan in [1, 3, 5, 7, 8, 10, 12]: num_hari = 31
         elif bln_depan in [4, 6, 9, 11]: num_hari = 30
         else: num_hari = 29 if thn_depan % 4 == 0 else 28
         
+        # Tentukan hari pertama bulan depan (0=Senin, 1=Selasa, dst)
         hari_pertama_idx = date_bulan_depan.weekday()
         nama_hari_format = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu']
         hari_ke_nama = [nama_hari_format[(hari_pertama_idx + d) % 7] for d in range(num_hari)]
@@ -94,13 +101,14 @@ if uploaded_file is not None:
 
                 for i in range(num_karyawan):
                     for d in range(num_hari):
-                        if i == 0:
+                        if i == 0:  # Jasmine hanya boleh S1, S2, atau OFF
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2]), f'x_{i}_{d}')
                         else:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2, 3]), f'x_{i}_{d}')
 
-                # Sesuai Aturan: Jumlah Libur Wajib dalam Sebulan
-                total_off_wajib = 9 if num_hari == 30 else 9
+                # Sesuai Aturan Ketentuan 2: Jumlah Libur Wajib dalam Sebulan
+                # Jika 30 hari -> 21 kerja, 9 OFF. Jika 31 hari -> 22 kerja, 9 OFF.
+                total_off_wajib = 9
                 
                 for i in range(num_karyawan):
                     is_off_days = []
@@ -111,7 +119,7 @@ if uploaded_file is not None:
                         is_off_days.append(is_off)
                     model.Add(sum(is_off_days) == total_off_wajib)
 
-                # Batasan Libur Mingguan (Senin-Minggu)
+                # Batasan Libur Mingguan Kalender (Senin-Minggu) Wajib 2-3 Hari
                 minggu_list = []
                 current_week = []
                 for d in range(num_hari):
@@ -134,7 +142,7 @@ if uploaded_file is not None:
                         else:
                             model.Add(sum(is_off_week) <= 2)
 
-                # Kapasitas Anggota Per Shift Harian
+                # Kapasitas Anggota Per Shift Harian (Shift 3 Wajib Berdua)
                 for d in range(num_hari):
                     for s in [1, 2, 3]:
                         is_in_shift = []
@@ -150,7 +158,7 @@ if uploaded_file is not None:
                             model.Add(sum(is_in_shift) >= 1)
                             model.Add(sum(is_in_shift) <= 2)
 
-                # Transisi Istirahat Minimal & Kontinuitas 31 Mei ke 1 Juni
+                # Transisi Istirahat Minimal & Kontinuitas Akhir Bulan Lalu ke Tanggal 1
                 for i in range(num_karyawan):
                     last_mei = riwayat_mei_seminggu[i][-1]
                     if last_mei == 3:
@@ -169,7 +177,7 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 2).OnlyEnforceIf(is_shift2.Not())
                         model.Add(x[i, d+1] != 1).OnlyEnforceIf(is_shift2)
 
-                # AMAN: Aturan Maksimal 5 Hari Kerja Berurutan Dioptimasi Khusus Internal Bulan Juni
+                # Aturan Maksimal 5 Hari Kerja Berurutan Khusus Internal Bulan Depan
                 for i in range(num_karyawan):
                     juni_offs = []
                     for d in range(num_hari):
@@ -178,15 +186,14 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 0).OnlyEnforceIf(is_off.Not())
                         juni_offs.append(is_off)
                     
-                    # Cek Jendela sliding window 6 hari di internal bulan Juni berjalan
                     for start_day in range(num_hari - 5):
                         window = juni_offs[start_day : start_day + 6]
                         model.Add(sum(window) >= 1)
 
-                # Eksekusi Solver
+                # Eksekusi Solver Matematika Optimasi
                 solver = cp_model.CpSolver()
                 solver.parameters.linearization_level = 0
-                solver.parameters.max_time_in_seconds = 10.0  # Batasi pencarian maks 10 detik agar web tidak hang
+                solver.parameters.max_time_in_seconds = 10.0
                 status = solver.Solve(model)
 
                 if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
@@ -195,11 +202,12 @@ if uploaded_file is not None:
                     ws.title = "Sheet1"
                     ws.views.sheetView[0].showGridLines = True
 
-                    fill_s1 = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                    # Pendefinisian Gaya Desain Visual & Warna Excel
+                    fill_s1 = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid") # Hijau
                     font_s1 = Font(name="Calibri", size=11, color="006100", bold=True)
-                    fill_s2 = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+                    fill_s2 = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid") # Kuning
                     font_s2 = Font(name="Calibri", size=11, color="9C6500", bold=True)
-                    fill_s3 = PatternFill(start_color="B4C6E7", end_color="B4C6E7", fill_type="solid")
+                    fill_s3 = PatternFill(start_color="B4C6E7", end_color="B4C6E7", fill_type="solid") # Biru
                     font_s3 = Font(name="Calibri", size=11, color="1F4E78", bold=True)
                     fill_off = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
                     font_off = Font(name="Calibri", size=11, color="A6A6A6")
@@ -210,8 +218,10 @@ if uploaded_file is not None:
                         top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9')
                     )
 
+                    # Tulis Judul Tanggal Bulan di A1
                     ws.cell(row=1, column=1, value=date_bulan_depan.strftime("%Y-%m-%d")).font = font_header
 
+                    # Susun Header Sisi Kiri
                     headers_kiri = ["Nama", "Layer", "Shift 1", "Shift 2", "Shift 3", "Libur", "Kerja", ""]
                     for col_idx, text in enumerate(headers_kiri, start=1):
                         cell = ws.cell(row=2, column=col_idx, value=text)
@@ -226,6 +236,7 @@ if uploaded_file is not None:
                             ws.cell(row=r, column=c).fill = fill_header
                             ws.cell(row=r, column=c).alignment = Alignment(horizontal="center" if c > 1 else "left", vertical="center")
 
+                    # Petakan Kolom Kalender dan Beri Celah Kolom Setiap Hari Minggu
                     col_mapping = {}
                     current_col = 9
                     for d in range(num_hari):
@@ -244,6 +255,7 @@ if uploaded_file is not None:
                             ws.cell(row=3, column=current_col).fill = fill_header
                         current_col += 1
 
+                    # Isi Seluruh Baris Data Jadwal Karyawan
                     for i in range(num_karyawan):
                         row_idx = i + 4
                         s1_c = sum(solver.Value(x[i, d]) == 1 for d in range(num_hari))
@@ -278,12 +290,14 @@ if uploaded_file is not None:
                             else:
                                 cell.value = "OFF"; cell.fill = fill_off; cell.font = font_off
 
+                    # Rapikan Lebar Kolom Excel
                     for col in ws.columns:
                         max_len = max(len(str(cell.value or '')) for cell in col)
                         col_letter = get_column_letter(col[0].column)
                         ws.column_dimensions[col_letter].width = max(max_len + 3, 6)
                     ws.column_dimensions['A'].width = 38
 
+                    # Bungkus data Excel ke dalam Buffer Memori untuk didownload
                     excel_buffer = io.BytesIO()
                     wb.save(excel_buffer)
                     excel_buffer.seek(0)
