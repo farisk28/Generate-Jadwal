@@ -78,7 +78,7 @@ if uploaded_file is not None:
         else: num_hari = 29 if thn_depan % 4 == 0 else 28
         
         hari_pertama_idx = date_bulan_depan.weekday()
-        nama_hari_format = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sattu', 'Minggu']
+        nama_hari_format = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu']
         hari_ke_nama = [nama_hari_format[(hari_pertama_idx + d) % 7] for d in range(num_hari)]
         
         st.success(f"Berhasil membaca data! Menyiapkan jadwal otomatis untuk Bulan: **{date_bulan_depan.strftime('%B %Y')}** ({num_hari} Hari).")
@@ -123,18 +123,16 @@ if uploaded_file is not None:
                 # =====================================================================
                 # PERBAIKAN LOGIKA MINGGUAN: MENYATUKAN SAMBUNGAN MINGGU BULAN LALU
                 # =====================================================================
-                # Kita petakan hari OFF riil dari 7 hari terakhir bulan lalu
                 riwayat_off_bulan_lalu = {}
                 for i in range(num_karyawan):
                     riwayat_off_bulan_lalu[i] = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i]]
 
-                # Kita hitung berapa hari bulan lalu yang masuk ke dalam potongan minggu pertama bulan ini
-                # Contoh: jika hari pertama bulan ini Rabu (indeks 2), berarti ada Senin & Selasa (2 hari) milik bulan lalu
                 jumlah_hari_bulan_lalu_di_minggu_awal = hari_pertama_idx
 
-                # Mulai susun batasan libur mingguan kalender (wajib 2-3 hari per minggu penuh)
-                # Minggu pertama digabung dengan data riil akhir bulan lalu agar adil dan tidak bentrok
+                # FIX: Inisialisasi awal list penampung minggu kalender
+                minggu_list = []
                 current_week = []
+                
                 for d in range(num_hari):
                     current_week.append(d)
                     if hari_ke_nama[d] == 'Minggu' or d == num_hari - 1:
@@ -142,18 +140,15 @@ if uploaded_file is not None:
                         if len(minggu_list) == 0 and jumlah_hari_bulan_lalu_di_minggu_awal > 0:
                             for i in range(num_karyawan):
                                 is_off_week = []
-                                # Ambil status libur riil dari hari-hari terakhir bulan lalu
                                 tgl_ambil_bulan_lalu = riwayat_off_bulan_lalu[i][-jumlah_hari_bulan_lalu_di_minggu_awal:]
                                 total_off_bulan_lalu = sum(tgl_ambil_bulan_lalu)
                                 
-                                # Tambahkan variabel penanda libur untuk tanggal-tanggal di bulan baru
                                 for d_new in current_week:
                                     is_off = model.NewBoolVar(f'is_off_w1_{i}_{d_new}')
                                     model.Add(x[i, d_new] == 0).OnlyEnforceIf(is_off)
                                     model.Add(x[i, d_new] != 0).OnlyEnforceIf(is_off.Not())
                                     is_off_week.append(is_off)
                                 
-                                # Batasan: (Libur di akhir bulan lalu) + (Libur di awal bulan ini) WAJIB 2-3 Hari
                                 model.Add(total_off_bulan_lalu + sum(is_off_week) >= 2)
                                 model.Add(total_off_bulan_lalu + sum(is_off_week) <= 3)
                         else:
@@ -170,10 +165,8 @@ if uploaded_file is not None:
                                     model.Add(sum(is_off_week) >= 2)
                                     model.Add(sum(is_off_week) <= 3)
                                 else:
-                                    # Sisa hari di akhir bulan (jika kurang dari 5 hari boleh <= 2 hari libur)
                                     model.Add(sum(is_off_week) <= 2)
                         
-                        # Tandai bahwa minggu ini sudah diproses, reset penampung
                         minggu_list.append(current_week)
                         current_week = []
 
