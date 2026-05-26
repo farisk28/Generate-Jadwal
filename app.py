@@ -95,6 +95,13 @@ if uploaded_file is not None:
                 model = cp_model.CpModel()
                 x = {}
 
+                # Cari indeks untuk Saut Parsaulian
+                saut_idx = -1
+                for idx, name in enumerate(karyawan):
+                    if "Saut" in name:
+                        saut_idx = idx
+                        break
+
                 for i in range(num_karyawan):
                     for d in range(num_hari):
                         if i == 0: # Jasmine hanya boleh Shift 1, Shift 2, atau OFF
@@ -185,38 +192,48 @@ if uploaded_file is not None:
                         model.Add(sum(window) >= 1)
 
                 # =====================================================================
-                # PERBAIKAN UTAMA: MENAMBAHKAN OPTIMASI KEADILAN DISTRIBUSI SHIFT (FAIRNESS)
+                # LOGIKA BARU: KUNCI AGAR SAUT PARSAULIAN DOMINAN DI SHIFT 1
                 # =====================================================================
-                # Kita batasi jatah maksimal Shift 3 per orang secara ketat agar merata
-                # Karena total slot Shift 3 sebulan = 30 hari x 2 orang = 60 slot.
-                # Dibagi 6 karyawan (Jasmine tidak masuk S3) -> Rata-rata ideal = 10 hari S3 per orang.
-                # Kita kunci rentang variasi Shift 3 agar berada di angka seimbang (misal: antara 8 sampai 12 hari)
                 for i in range(num_karyawan):
-                    if i != 0: # Kecuali Jasmine
+                    emp_s1_days = []
+                    for d in range(num_hari):
+                        is_s1 = model.NewBoolVar(f's1_count_i_{i}_d_{d}')
+                        model.Add(x[i, d] == 1).OnlyEnforceIf(is_s1)
+                        model.Add(x[i, d] != 1).OnlyEnforceIf(is_s1.Not())
+                        emp_s1_days.append(is_s1)
+                    
+                    # Jika karyawan ini adalah Saut Parsaulian, paksa Shift 1 dominan (antara 11 sampai 14 hari)
+                    if i == saut_idx and saut_idx != -1:
+                        model.Add(sum(emp_s1_days) >= 11)
+                        model.Add(sum(emp_s1_days) <= 14)
+                    else:
+                        # Karyawan lain porsi Shift 1 nya dibuat wajar (antara 2 sampai 8 hari) agar rata
+                        model.Add(sum(emp_s1_days) >= 2)
+                        model.Add(sum(emp_s1_days) <= 8)
+
+                # Distribusi Adil S3 (Shift Malam) bagi karyawan lain agar merata
+                for i in range(num_karyawan):
+                    if i != 0: # Di luar Jasmine
                         emp_s3_days = []
                         for d in range(num_hari):
                             is_s3 = model.NewBoolVar(f'fair_s3_i_{i}_d_{d}')
                             model.Add(x[i, d] == 3).OnlyEnforceIf(is_s3)
                             model.Add(x[i, d] != 3).OnlyEnforceIf(is_s3.Not())
                             emp_s3_days.append(is_s3)
-                        model.Add(sum(emp_s3_days) >= 8)  # Minimal dapat 8 kali Shift 3 sebulan
-                        model.Add(sum(emp_s3_days) <= 12) # Maksimal dapat 12 kali Shift 3 sebulan
-
-                # Begitu juga untuk Shift 2 agar dibagi seimbang (Target rentang ideal 5 s.d 11 hari)
-                for i in range(num_karyawan):
-                    emp_s2_days = []
-                    for d in range(num_hari):
-                        is_s2 = model.NewBoolVar(f'fair_s2_i_{i}_d_{d}')
-                        model.Add(x[i, d] == 2).OnlyEnforceIf(is_s2)
-                        model.Add(x[i, d] != 2).OnlyEnforceIf(is_s2.Not())
-                        emp_s2_days.append(is_s2)
-                    model.Add(sum(emp_s2_days) >= 5)
-                    model.Add(sum(emp_s2_days) <= 12)
+                        
+                        if i == saut_idx:
+                            # Karena Saut fokus di Shift 1, jatah Shift 3 Saut diturunkan (antara 2 s.d 5 hari)
+                            model.Add(sum(emp_s3_days) >= 2)
+                            model.Add(sum(emp_s3_days) <= 5)
+                        else:
+                            # Rekan lain membagi slot Shift 3 secara adil (antara 9 s.d 12 hari)
+                            model.Add(sum(emp_s3_days) >= 9)
+                            model.Add(sum(emp_s3_days) <= 12)
 
                 # Eksekusi Solver
                 solver = cp_model.CpSolver()
                 solver.parameters.linearization_level = 0
-                solver.parameters.max_time_in_seconds = 15.0  # Waktu komputasi ditambah agar pencarian titik seimbang optimal
+                solver.parameters.max_time_in_seconds = 15.0
                 status = solver.Solve(model)
 
                 if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
