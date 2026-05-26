@@ -279,4 +279,53 @@ if uploaded_file is not None:
                         s1_c = sum(solver.Value(x[i, d]) == 1 for d in range(num_hari))
                         s2_c = sum(solver.Value(x[i, d]) == 2 for d in range(num_hari))
                         s3_c = sum(solver.Value(x[i, d]) == 3 for d in range(num_hari))
-                        off_c = sum(solver.Value(x[i, d]) == 0 for d in range(num
+                        off_c = sum(solver.Value(x[i, d]) == 0 for d in range(num_hari))
+                        kerja_c = s1_c + s2_c + s3_c
+                        
+                        ws.cell(row=row_idx, column=1, value=karyawan[i]).font = Font(name="Calibri", size=11)
+                        ws.cell(row=row_idx, column=2, value="" if i == 0 else "L1").alignment = Alignment(horizontal="center")
+                        ws.cell(row=row_idx, column=3, value=s1_c).alignment = Alignment(horizontal="center")
+                        ws.cell(row=row_idx, column=4, value=s2_c).alignment = Alignment(horizontal="center")
+                        ws.cell(row=row_idx, column=5, value=s3_c).alignment = Alignment(horizontal="center")
+                        ws.cell(row=row_idx, column=6, value=off_c).alignment = Alignment(horizontal="center")
+                        ws.cell(row=row_idx, column=7, value=kerja_c).alignment = Alignment(horizontal="center")
+                        
+                        for c in range(1, 9): ws.cell(row=row_idx, column=c).border = thin_border
+                            
+                        for d in range(num_hari):
+                            target_col = col_mapping[d]
+                            val = solver.Value(x[i, d])
+                            cell = ws.cell(row=row_idx, column=target_col)
+                            cell.border = thin_border
+                            cell.alignment = Alignment(horizontal="center", vertical="center")
+                            
+                            if val == 1:
+                                cell.value = 1; cell.fill = fill_s1; cell.font = font_s1
+                            elif val == 2:
+                                cell.value = 2; cell.fill = fill_s2; cell.font = font_s2
+                            elif val == 3:
+                                cell.value = 3; cell.fill = fill_s3; cell.font = font_s3
+                            else:
+                                cell.value = "OFF"; cell.fill = fill_off; cell.font = font_off
+
+                    for col in ws.columns:
+                        max_len = max(len(str(cell.value or '')) for cell in col)
+                        col_letter = get_column_letter(col[0].column)
+                        ws.column_dimensions[col_letter].width = max(max_len + 3, 6)
+                    ws.column_dimensions['A'].width = 38
+
+                    excel_buffer = io.BytesIO()
+                    wb.save(excel_buffer)
+                    excel_buffer.seek(0)
+                    
+                    st.success("🎉 Penjadwalan sukses dibentuk tanpa ada aturan yang melanggar!")
+                    st.download_button(
+                        label="📥 Download Berkas Excel Jadwal Baru",
+                        data=excel_buffer,
+                        file_name=f"Jadwal_Otomatis_{date_bulan_depan.strftime('%B_%Y')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    st.error("Gagal! Algoritma mendeteksi adanya bentrokan aturan mutlak. Mohon periksa kembali kesesuaian jatah libur tim.")
+    except Exception as e:
+        st.error(f"Terjadi kesalahan format pembacaan file: {e}. Pastikan file template sesuai dengan format aslinya.")
