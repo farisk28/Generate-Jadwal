@@ -87,25 +87,22 @@ if uploaded_file is not None:
             for i, name in enumerate(karyawan):
                 st.write(f"- {name} | Riwayat 7 hari terakhir: {riwayat_mei_seminggu[i]}")
 
+        # =====================================================================
+        # STEP 3: TOMBOL GENERATE JADWAL
+        # =====================================================================
         if st.button("🚀 Jalankan Otomasi Penjadwalan"):
             with st.spinner("Algoritma sedang menghitung kombinasi terbaik... Mohon tunggu."):
                 model = cp_model.CpModel()
                 x = {}
 
-                # Cari indeks Saut Parsaulian di dalam list karyawan
-                saut_idx = -1
-                for idx, name in enumerate(karyawan):
-                    if "Saut" in name:
-                        saut_idx = idx
-                        break
-
                 for i in range(num_karyawan):
                     for d in range(num_hari):
-                        if i == 0:
+                        if i == 0: # Jasmine hanya boleh Shift 1, Shift 2, atau OFF
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2]), f'x_{i}_{d}')
                         else:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2, 3]), f'x_{i}_{d}')
 
+                # Ketentuan 2: Total Hari OFF Wajib = 9 Hari
                 total_off_wajib = 9
                 for i in range(num_karyawan):
                     is_off_days = []
@@ -116,6 +113,7 @@ if uploaded_file is not None:
                         is_off_days.append(is_off)
                     model.Add(sum(is_off_days) == total_off_wajib)
 
+                # Ketentuan 3: Libur Mingguan Kalender (Senin-Minggu) Wajib 2-3 Hari
                 minggu_list = []
                 current_week = []
                 for d in range(num_hari):
@@ -138,7 +136,7 @@ if uploaded_file is not None:
                         else:
                             model.Add(sum(is_off_week) <= 2)
 
-                # Kapasitas Anggota Per Shift Harian
+                # Ketentuan 4: Shift 3 Wajib Tepat Berdua. Shift 1 & 2 boleh 1-2 orang.
                 for d in range(num_hari):
                     for s in [1, 2, 3]:
                         is_in_shift = []
@@ -154,14 +152,7 @@ if uploaded_file is not None:
                             model.Add(sum(is_in_shift) >= 1)
                             model.Add(sum(is_in_shift) <= 2)
 
-                        # PERBAIKAN LOGIKA: Jika Saut berada di shift 's' pada hari 'd', 
-                        # maka total orang di shift tersebut dipaksa harus tepat 2 orang (tidak boleh 1 orang)
-                        if saut_idx != -1 and s in [1, 2]:
-                            saut_is_here = model.NewBoolVar(f'saut_here_s_{s}_d_{d}')
-                            model.Add(x[saut_idx, d] == s).OnlyEnforceIf(saut_is_here)
-                            model.Add(x[saut_idx, d] != s).OnlyEnforceIf(saut_is_here.Not())
-                            model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_is_here)
-
+                # Ketentuan 5 & 6: Transisi Istirahat Minimal & Kontinuitas Akhir Bulan Lalu
                 for i in range(num_karyawan):
                     last_mei = riwayat_mei_seminggu[i][-1]
                     if last_mei == 3:
@@ -180,6 +171,7 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 2).OnlyEnforceIf(is_shift2.Not())
                         model.Add(x[i, d+1] != 1).OnlyEnforceIf(is_shift2)
 
+                # Maksimal Kerja Berurutan 5 Hari Khusus Internal Bulan Berjalan
                 for i in range(num_karyawan):
                     juni_offs = []
                     for d in range(num_hari):
@@ -192,9 +184,39 @@ if uploaded_file is not None:
                         window = juni_offs[start_day : start_day + 6]
                         model.Add(sum(window) >= 1)
 
+                # =====================================================================
+                # PERBAIKAN UTAMA: MENAMBAHKAN OPTIMASI KEADILAN DISTRIBUSI SHIFT (FAIRNESS)
+                # =====================================================================
+                # Kita batasi jatah maksimal Shift 3 per orang secara ketat agar merata
+                # Karena total slot Shift 3 sebulan = 30 hari x 2 orang = 60 slot.
+                # Dibagi 6 karyawan (Jasmine tidak masuk S3) -> Rata-rata ideal = 10 hari S3 per orang.
+                # Kita kunci rentang variasi Shift 3 agar berada di angka seimbang (misal: antara 8 sampai 12 hari)
+                for i in range(num_karyawan):
+                    if i != 0: # Kecuali Jasmine
+                        emp_s3_days = []
+                        for d in range(num_hari):
+                            is_s3 = model.NewBoolVar(f'fair_s3_i_{i}_d_{d}')
+                            model.Add(x[i, d] == 3).OnlyEnforceIf(is_s3)
+                            model.Add(x[i, d] != 3).OnlyEnforceIf(is_s3.Not())
+                            emp_s3_days.append(is_s3)
+                        model.Add(sum(emp_s3_days) >= 8)  # Minimal dapat 8 kali Shift 3 sebulan
+                        model.Add(sum(emp_s3_days) <= 12) # Maksimal dapat 12 kali Shift 3 sebulan
+
+                # Begitu juga untuk Shift 2 agar dibagi seimbang (Target rentang ideal 5 s.d 11 hari)
+                for i in range(num_karyawan):
+                    emp_s2_days = []
+                    for d in range(num_hari):
+                        is_s2 = model.NewBoolVar(f'fair_s2_i_{i}_d_{d}')
+                        model.Add(x[i, d] == 2).OnlyEnforceIf(is_s2)
+                        model.Add(x[i, d] != 2).OnlyEnforceIf(is_s2.Not())
+                        emp_s2_days.append(is_s2)
+                    model.Add(sum(emp_s2_days) >= 5)
+                    model.Add(sum(emp_s2_days) <= 12)
+
+                # Eksekusi Solver
                 solver = cp_model.CpSolver()
                 solver.parameters.linearization_level = 0
-                solver.parameters.max_time_in_seconds = 10.0
+                solver.parameters.max_time_in_seconds = 15.0  # Waktu komputasi ditambah agar pencarian titik seimbang optimal
                 status = solver.Solve(model)
 
                 if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
@@ -257,53 +279,4 @@ if uploaded_file is not None:
                         s1_c = sum(solver.Value(x[i, d]) == 1 for d in range(num_hari))
                         s2_c = sum(solver.Value(x[i, d]) == 2 for d in range(num_hari))
                         s3_c = sum(solver.Value(x[i, d]) == 3 for d in range(num_hari))
-                        off_c = sum(solver.Value(x[i, d]) == 0 for d in range(num_hari))
-                        kerja_c = s1_c + s2_c + s3_c
-                        
-                        ws.cell(row=row_idx, column=1, value=karyawan[i]).font = Font(name="Calibri", size=11)
-                        ws.cell(row=row_idx, column=2, value="" if i == 0 else "L1").alignment = Alignment(horizontal="center")
-                        ws.cell(row=row_idx, column=3, value=s1_c).alignment = Alignment(horizontal="center")
-                        ws.cell(row=row_idx, column=4, value=s2_c).alignment = Alignment(horizontal="center")
-                        ws.cell(row=row_idx, column=5, value=s3_c).alignment = Alignment(horizontal="center")
-                        ws.cell(row=row_idx, column=6, value=off_c).alignment = Alignment(horizontal="center")
-                        ws.cell(row=row_idx, column=7, value=kerja_c).alignment = Alignment(horizontal="center")
-                        
-                        for c in range(1, 9): ws.cell(row=row_idx, column=c).border = thin_border
-                            
-                        for d in range(num_hari):
-                            target_col = col_mapping[d]
-                            val = solver.Value(x[i, d])
-                            cell = ws.cell(row=row_idx, column=target_col)
-                            cell.border = thin_border
-                            cell.alignment = Alignment(horizontal="center", vertical="center")
-                            
-                            if val == 1:
-                                cell.value = 1; cell.fill = fill_s1; cell.font = font_s1
-                            elif val == 2:
-                                cell.value = 2; cell.fill = fill_s2; cell.font = font_s2
-                            elif val == 3:
-                                cell.value = 3; cell.fill = fill_s3; cell.font = font_s3
-                            else:
-                                cell.value = "OFF"; cell.fill = fill_off; cell.font = font_off
-
-                    for col in ws.columns:
-                        max_len = max(len(str(cell.value or '')) for cell in col)
-                        col_letter = get_column_letter(col[0].column)
-                        ws.column_dimensions[col_letter].width = max(max_len + 3, 6)
-                    ws.column_dimensions['A'].width = 38
-
-                    excel_buffer = io.BytesIO()
-                    wb.save(excel_buffer)
-                    excel_buffer.seek(0)
-                    
-                    st.success("🎉 Penjadwalan sukses dibentuk tanpa ada aturan yang melanggar!")
-                    st.download_button(
-                        label="📥 Download Berkas Excel Jadwal Baru",
-                        data=excel_buffer,
-                        file_name=f"Jadwal_Otomatis_{date_bulan_depan.strftime('%B_%Y')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                else:
-                    st.error("Gagal! Algoritma mendeteksi adanya bentrokan aturan mutlak. Mohon periksa kembali kesesuaian jatah libur tim.")
-    except Exception as e:
-        st.error(f"Terjadi kesalahan format pembacaan file: {e}. Pastikan file template sesuai dengan format aslinya.")
+                        off_c = sum(solver.Value(x[i, d]) == 0 for d in range(num
