@@ -103,7 +103,7 @@ if uploaded_file is not None:
 
                 for i in range(num_karyawan):
                     for d in range(num_hari):
-                        if i == 0: # SYARAT 2: Jasmine hanya boleh Shift 1, Shift 2, atau OFF
+                        if i == 0: # Jasmine hanya boleh Shift 1, Shift 2, atau OFF
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2]), f'x_{i}_{d}')
                         else:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2, 3]), f'x_{i}_{d}')
@@ -135,7 +135,33 @@ if uploaded_file is not None:
                     model.Add(sum(hari_offs) >= 1) 
                     model.Add(sum(hari_offs) <= 3) 
 
-                # Logika Libur Mingguan Kalender Menyambung
+                # =====================================================================
+                # PERBAIKAN BARU: LOGIKA KUNCI LIBUR BERTURUT-TURUT (TIDAK BOLEH TERPISAH)
+                # =====================================================================
+                for i in range(num_karyawan):
+                    current_offs = []
+                    for d in range(num_hari):
+                        is_off = model.NewBoolVar(f'consec_off_i_{i}_d_{d}')
+                        model.Add(x[i, d] == 0).OnlyEnforceIf(is_off)
+                        model.Add(x[i, d] != 0).OnlyEnforceIf(is_off.Not())
+                        current_offs.append(is_off)
+                    
+                    # Ambil data hari terakhir bulan lalu dari riwayat
+                    prev_day_was_off = 1 if riwayat_mei_seminggu[i][-1] == 0 else 0
+                    
+                    # Jika hari terakhir bulan lalu masuk kerja, dan tanggal 1 bulan baru libur, 
+                    # maka tanggal 2 WAJIB ikut libur agar minimal menjadi 2 hari berturut-turut.
+                    if prev_day_was_off == 0:
+                        model.Add(current_offs[1] == 1).OnlyEnforceIf(current_offs[0])
+                    
+                    # Untuk hari-hari di tengah bulan (Hari ke-2 sampai H-1)
+                    for d in range(1, num_hari - 1):
+                        # Jika hari d libur, maka salah satu dari hari kemarin atau besok HARUS ikut libur
+                        model.AddBoolOr([current_offs[d-1], current_offs[d+1]]).OnlyEnforceIf(current_offs[d])
+
+                # =====================================================================
+                # PERBAIKAN UTAMA: MEMAKSA LIBUR MINGGU TRANSISI WAJIB 2-3 HARI UTUH
+                # =====================================================================
                 riwayat_off_bulan_lalu = {}
                 for i in range(num_karyawan):
                     riwayat_off_bulan_lalu[i] = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i]]
@@ -162,7 +188,8 @@ if uploaded_file is not None:
                                     model.Add(x[i, d_new] != 0).OnlyEnforceIf(is_off.Not())
                                     is_off_week.append(is_off)
                                 
-                                model.Add(total_off_bulan_lalu + sum(is_off_week) >= 1)
+                                # FIX MUTLAK: Sekarang dikunci kembali ke jatah standar 1 minggu penuh (2-3 hari OFF)
+                                model.Add(total_off_bulan_lalu + sum(is_off_week) >= 2)
                                 model.Add(total_off_bulan_lalu + sum(is_off_week) <= 3)
                         else:
                             for i in range(num_karyawan):
@@ -174,7 +201,7 @@ if uploaded_file is not None:
                                     is_off_week.append(is_off)
                                 
                                 if len(current_week) == 7:
-                                    model.Add(sum(is_off_week) >= 1)
+                                    model.Add(sum(is_off_week) >= 2)
                                     model.Add(sum(is_off_week) <= 3)
                                 else:
                                     model.Add(sum(is_off_week) <= 2)
@@ -204,7 +231,7 @@ if uploaded_file is not None:
                             model.Add(x[saut_idx, d] != s).OnlyEnforceIf(saut_disini.Not())
                             model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_disini)
 
-                # Transisi Istirahat Minimal
+                # Transisi Istirahat Minimal Lintas Bulan
                 for i in range(num_karyawan):
                     last_mei = riwayat_mei_seminggu[i][-1]
                     if last_mei == 3:
@@ -223,14 +250,9 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 2).OnlyEnforceIf(is_shift2.Not())
                         model.Add(x[i, d+1] != 1).OnlyEnforceIf(is_shift2)
 
-                # =====================================================================
-                # PERBAIKAN SEAMLESS: Maksimal Kerja Berurutan 5 Hari Lintas Batas Bulan
-                # =====================================================================
+                # Maksimal Kerja Berurutan 5 Hari Lintas Batas Bulan
                 for i in range(num_karyawan):
-                    # Ambil status OFF riil dari 5 hari terakhir bulan lalu (1 jika OFF, 0 jika kerja)
                     prev_offs = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i][-5:]]
-                    
-                    # Buat variabel OFF untuk bulan berjalan
                     current_offs = []
                     for d in range(num_hari):
                         is_off = model.NewBoolVar(f'max_work_off_{i}_{d}')
@@ -238,15 +260,12 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 0).OnlyEnforceIf(is_off.Not())
                         current_offs.append(is_off)
                     
-                    # Sambungkan riwayat bulan lalu dengan bulan ini menjadi satu garis waktu utuh
                     all_offs = prev_offs + current_offs
-                    
-                    # Dalam jendela 6 hari berturut-turut di sepanjang garis waktu wajib ada minimal 1 hari OFF
                     for start_day in range(len(all_offs) - 5):
                         window = all_offs[start_day : start_day + 6]
                         model.Add(sum(window) >= 1)
 
-                # REVISI REQ SYARAT 3: Kunci Agar Saut Parsaulian DOMINAN di Shift 1 (Maksimal 12 Hari)
+                # SYARAT 3 (Tambahan): Kunci Agar Saut Parsaulian DOMINAN di Shift 1 (Maksimal 12 Hari)
                 for i in range(num_karyawan):
                     emp_s1_days = []
                     for d in range(num_hari):
