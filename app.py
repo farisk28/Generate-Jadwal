@@ -73,7 +73,6 @@ if uploaded_file is not None:
             
         date_bulan_depan = datetime.date(thn_depan, bln_depan, 1)
         
-        # Hitung jumlah hari di bulan depan secara akurat
         if bln_depan in [1, 3, 5, 7, 8, 10, 12]: num_hari = 31
         elif bln_depan in [4, 6, 9, 11]: num_hari = 30
         else: num_hari = 29 if thn_depan % 4 == 0 else 28
@@ -96,7 +95,6 @@ if uploaded_file is not None:
                 model = cp_model.CpModel()
                 x = {}
 
-                # Cari indeks untuk Saut Parsaulian
                 saut_idx = -1
                 for idx, name in enumerate(karyawan):
                     if "Saut" in name:
@@ -110,15 +108,11 @@ if uploaded_file is not None:
                         else:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2, 3]), f'x_{i}_{d}')
 
-                # =====================================================================
-                # PERBAIKAN DINAMIS: JUMLAH HARI LIBUR SEBULAN SESUAI PERMINTAAN USER
-                # =====================================================================
+                # Ketentuan Baru Libur Bulanan: 31 Hari = 9 OFF, 30 Hari atau kurang = 8 OFF
                 if num_hari in [28, 29, 30]:
                     total_off_wajib = 8
-                elif num_hari == 31:
-                    total_off_wajib = 9
                 else:
-                    total_off_wajib = 9 # Fallback aman
+                    total_off_wajib = 9
                 
                 for i in range(num_karyawan):
                     is_off_days = []
@@ -129,9 +123,7 @@ if uploaded_file is not None:
                         is_off_days.append(is_off)
                     model.Add(sum(is_off_days) == total_off_wajib)
 
-                # =====================================================================
-                # LOGIKA MINGGUAN SAMBUNGAN KALENDER
-                # =====================================================================
+                # Logika Libur Mingguan Kalender Menyambung
                 riwayat_off_bulan_lalu = {}
                 for i in range(num_karyawan):
                     riwayat_off_bulan_lalu[i] = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i]]
@@ -144,7 +136,10 @@ if uploaded_file is not None:
                 for d in range(num_hari):
                     current_week.append(d)
                     if hari_ke_nama[d] == 'Minggu' or d == num_hari - 1:
-                        if len(minggu_list) == 0 and jumlah_hari_bulan_lalu_di_minggu_awal > 0:
+                        # FIX: Pengecekan len(minggu_list) dipisahkan agar aman
+                        is_minggu_pertama = (len(minggu_list) == 0)
+                        
+                        if is_minggu_pertama and jumlah_hari_bulan_lalu_di_minggu_awal > 0:
                             for i in range(num_karyawan):
                                 is_off_week = []
                                 tgl_ambil_bulan_lalu = riwayat_off_bulan_lalu[i][-jumlah_hari_bulan_lalu_di_minggu_awal:]
@@ -176,7 +171,7 @@ if uploaded_file is not None:
                         minggu_list.append(current_week)
                         current_week = []
 
-                # Ketentuan 4: Shift 3 Wajib Tepat Berdua. Shift 1 & 2 boleh 1-2 orang.
+                # Kapasitas Shift Harian (Shift 3 Wajib Berdua)
                 for d in range(num_hari):
                     for s in [1, 2, 3]:
                         is_in_shift = []
@@ -192,7 +187,7 @@ if uploaded_file is not None:
                             model.Add(sum(is_in_shift) >= 1)
                             model.Add(sum(is_in_shift) <= 2)
 
-                # Ketentuan 5 & 6: Transisi Istirahat Minimal & Kontinuitas Akhir Bulan Lalu
+                # Transisi Istirahat Minimal
                 for i in range(num_karyawan):
                     last_mei = riwayat_mei_seminggu[i][-1]
                     if last_mei == 3:
@@ -211,7 +206,7 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 2).OnlyEnforceIf(is_shift2.Not())
                         model.Add(x[i, d+1] != 1).OnlyEnforceIf(is_shift2)
 
-                # Maksimal Kerja Berurutan 5 Hari Khusus Internal Bulan Berjalan
+                # Maksimal Kerja Berurutan 5 Hari
                 for i in range(num_karyawan):
                     juni_offs = []
                     for d in range(num_hari):
@@ -224,7 +219,7 @@ if uploaded_file is not None:
                         window = juni_offs[start_day : start_day + 6]
                         model.Add(sum(window) >= 1)
 
-                # Kunci Agar Saut Parsaulian Dominan di Shift 1 (11 - 14 Hari)
+                # Kunci Agar Saut Parsaulian Dominan di Shift 1 (10 s.d 14 Hari)
                 for i in range(num_karyawan):
                     emp_s1_days = []
                     for d in range(num_hari):
@@ -234,11 +229,11 @@ if uploaded_file is not None:
                         emp_s1_days.append(is_s1)
                     
                     if i == saut_idx and saut_idx != -1:
-                        model.Add(sum(emp_s1_days) >= 11)
+                        model.Add(sum(emp_s1_days) >= 10)
                         model.Add(sum(emp_s1_days) <= 14)
                     else:
-                        model.Add(sum(emp_s1_days) >= 2)
-                        model.Add(sum(emp_s1_days) <= 8)
+                        model.Add(sum(emp_s1_days) >= 1)
+                        model.Add(sum(emp_s1_days) <= 9)
 
                 # Distribusi Adil Shift 3 (Malam)
                 for i in range(num_karyawan):
@@ -251,16 +246,16 @@ if uploaded_file is not None:
                             emp_s3_days.append(is_s3)
                         
                         if i == saut_idx:
-                            model.Add(sum(emp_s3_days) >= 2)
-                            model.Add(sum(emp_s3_days) <= 5)
+                            model.Add(sum(emp_s3_days) >= 1)
+                            model.Add(sum(emp_s3_days) <= 6)
                         else:
-                            model.Add(sum(emp_s3_days) >= 9)
-                            model.Add(sum(emp_s3_days) <= 12)
+                            model.Add(sum(emp_s3_days) >= 8)
+                            model.Add(sum(emp_s3_days) <= 14)
 
                 # Eksekusi Solver
                 solver = cp_model.CpSolver()
                 solver.parameters.linearization_level = 0
-                solver.parameters.max_time_in_seconds = 15.0
+                solver.parameters.max_time_in_seconds = 20.0
                 status = solver.Solve(model)
 
                 if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
@@ -372,4 +367,4 @@ if uploaded_file is not None:
                 else:
                     st.error("Gagal! Algoritma mendeteksi adanya bentrokan aturan mutlak. Mohon periksa kembali kesesuaian jatah libur tim.")
     except Exception as e:
-        st.error(f"Terjadi kesalahan format pembacaan file: {e}. Pastikan file template sesuai dengan format aslinya.")
+        st.error(f"Terjadi kesalahan format pembacaan file: {e}. Pastikan file template sesuai dengan format
