@@ -136,7 +136,6 @@ if uploaded_file is not None:
                 for d in range(num_hari):
                     current_week.append(d)
                     if hari_ke_nama[d] == 'Minggu' or d == num_hari - 1:
-                        # FIX: Pengecekan len(minggu_list) dipisahkan agar aman
                         is_minggu_pertama = (len(minggu_list) == 0)
                         
                         if is_minggu_pertama and jumlah_hari_bulan_lalu_di_minggu_awal > 0:
@@ -171,7 +170,7 @@ if uploaded_file is not None:
                         minggu_list.append(current_week)
                         current_week = []
 
-                # Kapasitas Shift Harian (Shift 3 Wajib Berdua)
+                # Kapasitas Shift Harian (Shift 3 Wajib Tepat Berdua)
                 for d in range(num_hari):
                     for s in [1, 2, 3]:
                         is_in_shift = []
@@ -367,4 +366,4 @@ if uploaded_file is not None:
                 else:
                     st.error("Gagal! Algoritma mendeteksi adanya bentrokan aturan mutlak. Mohon periksa kembali kesesuaian jatah libur tim.")
     except Exception as e:
-        st.error(f"Terjadi kesalahan format pembacaan file: {e}. Pastikan file template sesuai dengan format
+        st.error(f"Terjadi kesalahan format pembacaan file: {e}. Pastikan file template sesuai dengan format aslinya.")
