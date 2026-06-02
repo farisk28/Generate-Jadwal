@@ -62,7 +62,7 @@ if uploaded_file is not None:
         karyawan, riwayat_weekly_dict, date_bulan_lalu = baca_riwayat_bulan_lalu(uploaded_file)
         num_karyawan = len(karyawan)
         
-        # Buat list riwayat seminggu terakhir yang sinkron berdasarkan nama karyawan
+        # Sinkronisasi riwayat berdasarkan daftar nama karyawan aktif
         riwayat_mei_seminggu = [riwayat_weekly_dict[name] for name in karyawan]
         
         if date_bulan_lalu.month == 12:
@@ -133,21 +133,21 @@ if uploaded_file is not None:
                     model.Add(sum(is_off_matrix[i, d] for i in range(num_karyawan)) <= 3) 
 
                 # =====================================================================
-                # PERBAIKAN BARU: MAKSIMAL LIBUR BERTURUT-TURUT HANYA 3 HARI CEILING (MUTLAK)
+                # SYARAT BARU: MAKSIMAL LIBUR BERTURUT-TURUT HANYA 3 HARI MUTLAK (CEILING)
                 # =====================================================================
                 for i in range(num_karyawan):
-                    # Ambil status libur 3 hari terakhir dari bulan lalu
                     prev_offs_3d = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i][-3:]]
-                    
-                    # Hubungkan dengan variabel libur bulan ini
                     full_off_timeline = prev_offs_3d + [is_off_matrix[i, d] for d in range(num_hari)]
                     
-                    # Dalam jendela 4 hari berurutan, tidak boleh semuanya bernilai 1 (OFF) -> Maksimal hanya 3 hari OFF berurutan
+                    # Window 4 hari berturut-turut tidak boleh semuanya bernilai 1 (OFF)
                     for start_idx in range(len(full_off_timeline) - 3):
                         window = full_off_timeline[start_idx : start_idx + 4]
                         model.Add(sum(window) <= 3)
 
-                # OPTIMASI PRIORITAS: Menggandengkan Libur Agar Sebisa Mungkin Berurutan (Soft)
+                # =====================================================================
+                # OPTIMASI MULTI-OBJEKTIF (SOFT CONSTRAINTS PRIORITAS)
+                # =====================================================================
+                # Target 1: Menggandengkan Libur Agar Sebisa Mungkin Berurutan (Maks 3 hari)
                 consec_off_vars = []
                 for i in range(num_karyawan):
                     for d in range(num_hari - 1):
@@ -155,11 +155,9 @@ if uploaded_file is not None:
                         model.AddBoolAnd([is_off_matrix[i, d], is_off_matrix[i, d+1]]).OnlyEnforceIf(pair_consec)
                         model.AddBoolOr([is_off_matrix[i, d].Not(), is_off_matrix[i, d+1].Not()]).OnlyEnforceIf(pair_consec.Not())
                         consec_off_vars.append(pair_consec)
-                model.Maximize(sum(consec_off_vars))
 
-                # =====================================================================
-                # PERBAIKAN BARU: LOGIKA KUNCI LIBUR MINGGU TRANSISI KALENDER UTUH 2-3 HARI
-                # =====================================================================
+                # Target 2: Mengejar Jatah Ideal Libur Mingguan 2-3 Hari Lewat Jalur Hadiah Poin
+                week_per_emp_ideal = []
                 riwayat_off_bulan_lalu = {}
                 for i in range(num_karyawan):
                     riwayat_off_bulan_lalu[i] = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i]]
@@ -176,26 +174,44 @@ if uploaded_file is not None:
 
                 for idx_w, week in enumerate(weeks):
                     if idx_w == 0 and jumlah_hari_bulan_lalu_di_minggu_awal > 0:
-                        # JALUR TRANSISI: Menyambung Senin-Selasa bulan lalu dengan Rabu-Minggu bulan ini
                         for i in range(num_karyawan):
                             tgl_ambil_bulan_lalu = riwayat_off_bulan_lalu[i][-jumlah_hari_bulan_lalu_di_minggu_awal:]
                             total_off_bulan_lalu = sum(tgl_ambil_bulan_lalu)
+                            total_off_this_week = total_off_bulan_lalu + sum(is_off_matrix[i, d] for d in week)
                             
-                            # Kunci mati: Libur di minggu gabungan kalender ini WAJIB 2-3 hari!
-                            model.Add(total_off_bulan_lalu + sum(is_off_matrix[i, d] for d in week) >= 2)
-                            model.Add(total_off_bulan_lalu + sum(is_off_matrix[i, d] for d in week) <= 3)
+                            # Batas aman (hard) agar kalender tidak deadlock
+                            model.Add(total_off_this_week >= 1)
+                            model.Add(total_off_this_week <= 3)
+                            
+                            # Hadiah poin jika berhasil menyentuh jatah ideal 2-3 hari
+                            is_ideal = model.NewBoolVar(f'ideal_w0_i_{i}')
+                            model.Add(total_off_this_week >= 2).OnlyEnforceIf(is_ideal)
+                            model.Add(total_off_this_week < 2).OnlyEnforceIf(is_ideal.Not())
+                            week_per_emp_ideal.append(is_ideal)
                     elif len(week) == 7:
-                        # MINGGU REGULER PENH
                         for i in range(num_karyawan):
-                            model.Add(sum(is_off_matrix[i, d] for d in week) >= 2)
-                            model.Add(sum(is_off_matrix[i, d] for d in week) <= 3)
+                            total_off_this_week = sum(is_off_matrix[i, d] for d in week)
+                            model.Add(total_off_this_week >= 1)
+                            model.Add(total_off_this_week <= 3)
+                            
+                            is_ideal = model.NewBoolVar(f'ideal_w{idx_w}_i_{i}')
+                            model.Add(total_off_this_week >= 2).OnlyEnforceIf(is_ideal)
+                            model.Add(total_off_this_week < 2).OnlyEnforceIf(is_ideal.Not())
+                            week_per_emp_ideal.append(is_ideal)
                     else:
-                        # MINGGU TERAKHIR POTONGAN
                         for i in range(num_karyawan):
                             model.Add(sum(is_off_matrix[i, d] for d in week) <= 2)
 
-                # Kapasitas Shift Harian & SYARAT 3: Kunci agar Saut WAJIB BERDUA di shift manapun
+                # Eksekusi Maksimisasi Target Kombinasi
+                model.Maximize(10 * sum(week_per_emp_ideal) + sum(consec_off_vars))
+
+                # =====================================================================
+                # LOGIKA OPERASIONAL SHIFT DAN KETENTUAN KHUSUS
+                # =====================================================================
+                saut_alone_weekdays = []
                 for d in range(num_hari):
+                    is_weekend = hari_ke_nama[d] in ['Sabtu', 'Minggu']
+                    
                     for s in [1, 2, 3]:
                         is_in_shift = []
                         for i in range(num_karyawan):
@@ -226,12 +242,12 @@ if uploaded_file is not None:
                                 model.AddBoolAnd([saut_disini, s1_is_one]).OnlyEnforceIf(saut_sendirian)
                                 model.AddBoolOr([saut_disini.Not(), s1_is_one.Not()]).OnlyEnforceIf(saut_sendirian.Not())
                                 
-                                if hari_ke_nama[d] in ['Sabtu', 'Minggu']:
-                                    model.Add(saut_sendirian == 0)
+                                if is_weekend:
+                                    model.Add(saut_sendirian == 0) # Wajib berdua di weekend
                                 else:
-                                    saut_alone_weekdays.append(saut_sendirian) if 'saut_alone_weekdays' in locals() else locals().update({'saut_alone_weekdays': [saut_sendirian]})
+                                    saut_alone_weekdays.append(saut_sendirian)
 
-                if saut_idx != -1 and 'saut_alone_weekdays' in locals():
+                if saut_idx != -1 and len(saut_alone_weekdays) > 0:
                     model.Add(sum(saut_alone_weekdays) <= 4)
 
                 # Transisi Istirahat Minimal Lintas Bulan
