@@ -132,10 +132,10 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 0).OnlyEnforceIf(is_off.Not())
                         hari_offs.append(is_off)
                     
-                    model.Add(sum(hari_offs) >= 1) # Minimal 1 orang libur per hari
-                    model.Add(sum(hari_offs) <= 3) # Maksimal 3 orang libur per hari (dominan 1-2 orang)
+                    model.Add(sum(hari_offs) >= 1) 
+                    model.Add(sum(hari_offs) <= 3) 
 
-                # Logika Libur Mingguan Kalender Menyambung (Disesuaikan agar Ramah Jatah Bulanan)
+                # Logika Libur Mingguan Kalender Menyambung
                 riwayat_off_bulan_lalu = {}
                 for i in range(num_karyawan):
                     riwayat_off_bulan_lalu[i] = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i]]
@@ -182,7 +182,7 @@ if uploaded_file is not None:
                         minggu_list.append(current_week)
                         current_week = []
 
-                # Kapasitas Shift Harian & SYARAT 3: Kunci agar Saut WAJIB BERDUA di shift manapun
+                # Kapasitas Shift Harian & SYARAT 3: Kunci agar Saut SELALU BERDUA di shift manapun
                 for d in range(num_hari):
                     for s in [1, 2, 3]:
                         is_in_shift = []
@@ -193,12 +193,11 @@ if uploaded_file is not None:
                             is_in_shift.append(in_shift)
                         
                         if s == 3:
-                            model.Add(sum(is_in_shift) == 2) # Shift 3 mutlak selalu berdua
+                            model.Add(sum(is_in_shift) == 2) 
                         else:
                             model.Add(sum(is_in_shift) >= 1)
                             model.Add(sum(is_in_shift) <= 2)
 
-                        # SYARAT 3: Jika Saut berada di shift 's' pada hari 'd', shift tersebut WAJIB tepat diisi 2 orang (tidak boleh sendirian)
                         if saut_idx != -1:
                             saut_disini = model.NewBoolVar(f'saut_is_at_s_{s}_d_{d}')
                             model.Add(x[saut_idx, d] == s).OnlyEnforceIf(saut_disini)
@@ -224,17 +223,27 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 2).OnlyEnforceIf(is_shift2.Not())
                         model.Add(x[i, d+1] != 1).OnlyEnforceIf(is_shift2)
 
-                # Maksimal Kerja Berurutan 5 Hari
+                # =====================================================================
+                # PERBAIKAN SEAMLESS: Maksimal Kerja Berurutan 5 Hari Lintas Batas Bulan
+                # =====================================================================
                 for i in range(num_karyawan):
-                    juni_offs = []
+                    # Ambil status OFF riil dari 5 hari terakhir bulan lalu (1 jika OFF, 0 jika kerja)
+                    prev_offs = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i][-5:]]
+                    
+                    # Buat variabel OFF untuk bulan berjalan
+                    current_offs = []
                     for d in range(num_hari):
                         is_off = model.NewBoolVar(f'max_work_off_{i}_{d}')
                         model.Add(x[i, d] == 0).OnlyEnforceIf(is_off)
                         model.Add(x[i, d] != 0).OnlyEnforceIf(is_off.Not())
-                        juni_offs.append(is_off)
+                        current_offs.append(is_off)
                     
-                    for start_day in range(num_hari - 5):
-                        window = juni_offs[start_day : start_day + 6]
+                    # Sambungkan riwayat bulan lalu dengan bulan ini menjadi satu garis waktu utuh
+                    all_offs = prev_offs + current_offs
+                    
+                    # Dalam jendela 6 hari berturut-turut di sepanjang garis waktu wajib ada minimal 1 hari OFF
+                    for start_day in range(len(all_offs) - 5):
+                        window = all_offs[start_day : start_day + 6]
                         model.Add(sum(window) >= 1)
 
                 # REVISI REQ SYARAT 3: Kunci Agar Saut Parsaulian DOMINAN di Shift 1 (Maksimal 12 Hari)
@@ -247,8 +256,8 @@ if uploaded_file is not None:
                         emp_s1_days.append(is_s1)
                     
                     if i == saut_idx and saut_idx != -1:
-                        model.Add(sum(emp_s1_days) >= 8)  # Beri jatah bawah agar tetap dominan dibanding shift lain
-                        model.Add(sum(emp_s1_days) <= 12) # Batas atas MUTLAK maksimal 12 hari sesuai permintaan Anda
+                        model.Add(sum(emp_s1_days) >= 8)  
+                        model.Add(sum(emp_s1_days) <= 12) 
                     else:
                         model.Add(sum(emp_s1_days) >= 1)
                         model.Add(sum(emp_s1_days) <= 9)
