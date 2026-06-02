@@ -73,6 +73,7 @@ if uploaded_file is not None:
             
         date_bulan_depan = datetime.date(thn_depan, bln_depan, 1)
         
+        # Hitung jumlah hari di bulan depan secara akurat
         if bln_depan in [1, 3, 5, 7, 8, 10, 12]: num_hari = 31
         elif bln_depan in [4, 6, 9, 11]: num_hari = 30
         else: num_hari = 29 if thn_depan % 4 == 0 else 28
@@ -109,8 +110,16 @@ if uploaded_file is not None:
                         else:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2, 3]), f'x_{i}_{d}')
 
-                # Ketentuan 2: Total Hari OFF Wajib = 9 Hari
-                total_off_wajib = 9
+                # =====================================================================
+                # PERBAIKAN DINAMIS: JUMLAH HARI LIBUR SEBULAN SESUAI PERMINTAAN USER
+                # =====================================================================
+                if num_hari in [28, 29, 30]:
+                    total_off_wajib = 8
+                elif num_hari == 31:
+                    total_off_wajib = 9
+                else:
+                    total_off_wajib = 9 # Fallback aman
+                
                 for i in range(num_karyawan):
                     is_off_days = []
                     for d in range(num_hari):
@@ -121,7 +130,7 @@ if uploaded_file is not None:
                     model.Add(sum(is_off_days) == total_off_wajib)
 
                 # =====================================================================
-                # PERBAIKAN LOGIKA MINGGUAN: MENYATUKAN SAMBUNGAN MINGGU BULAN LALU
+                # LOGIKA MINGGUAN SAMBUNGAN KALENDER
                 # =====================================================================
                 riwayat_off_bulan_lalu = {}
                 for i in range(num_karyawan):
@@ -129,14 +138,12 @@ if uploaded_file is not None:
 
                 jumlah_hari_bulan_lalu_di_minggu_awal = hari_pertama_idx
 
-                # FIX: Inisialisasi awal list penampung minggu kalender
                 minggu_list = []
                 current_week = []
                 
                 for d in range(num_hari):
                     current_week.append(d)
                     if hari_ke_nama[d] == 'Minggu' or d == num_hari - 1:
-                        # Jika ini adalah minggu pertama dan memiliki sambungan dari bulan lalu
                         if len(minggu_list) == 0 and jumlah_hari_bulan_lalu_di_minggu_awal > 0:
                             for i in range(num_karyawan):
                                 is_off_week = []
@@ -152,7 +159,6 @@ if uploaded_file is not None:
                                 model.Add(total_off_bulan_lalu + sum(is_off_week) >= 2)
                                 model.Add(total_off_bulan_lalu + sum(is_off_week) <= 3)
                         else:
-                            # Untuk minggu-minggu reguler di tengah bulan
                             for i in range(num_karyawan):
                                 is_off_week = []
                                 for d_new in current_week:
