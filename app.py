@@ -395,8 +395,8 @@ if uploaded_file is not None:
                         ["1", "07.00", "16.00", "Kerja"],
                         ["2", "14.00", "23.00", "Kerja"],
                         ["3", "22.30", "07.30", "Kerja"],
-                        ["OFF", "(Kosong)", "(Kosong)", "Libur"],
-                        ["CUTI", "(Kosong)", "(Kosong)", "Cuti"]
+                        ["OFF", "", "", "Libur"],
+                        ["CUTI", "", "", "Cuti"]
                     ]
                     
                     # Tulis Header Shift
