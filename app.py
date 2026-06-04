@@ -212,7 +212,7 @@ if uploaded_file is not None:
                             model.Add(x[saut_idx, d] != s).OnlyEnforceIf(saut_disini.Not())
                             model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_disini)
 
-                # PEMBARUAN SYARAT 2: Maksimal 5 Hari Kerja Berturut-turut Lintas Batas Bulan
+                # KETENTUAN 5: Maksimal 5 Hari Kerja Berturut-turut Lintas Batas Bulan
                 for i in range(num_karyawan):
                     prev_work_offs = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i][-5:]]
                     current_work_offs = [is_off_matrix[i, d] for d in range(num_hari)]
@@ -241,7 +241,7 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 2).OnlyEnforceIf(is_shift2.Not())
                         model.Add(x[i, d+1] != 1).OnlyEnforceIf(is_shift2)
 
-                # PEMBARUAN SYARAT 1: Jatah Total Shift 1 Saut Maksimal 15 Kali
+                # PERBAIKAN LOGIKA 1: Kunci Jatah Total Shift 1 Saut (Minimal 10 dan Maksimal 15)
                 for i in range(num_karyawan):
                     emp_s1_days = []
                     for d in range(num_hari):
@@ -251,11 +251,11 @@ if uploaded_file is not None:
                         emp_s1_days.append(is_s1)
                     
                     if i == saut_idx and saut_idx != -1:
-                        model.Add(sum(emp_s1_days) >= 8)  # Batas bawah untuk dominasi pagi
-                        model.Add(sum(emp_s1_days) <= 15) # PEMBARUAN: Maksimal tepat 15 kali sebulan
+                        model.Add(sum(emp_s1_days) >= 10) # Minimal diubah menjadi 10 hari sesuai permintaan baru
+                        model.Add(sum(emp_s1_days) <= 15) # Maksimal tepat 15 kali sebulan
                     else:
                         model.Add(sum(emp_s1_days) >= 1)
-                        model.Add(sum(emp_s1_days) <= 10)
+                        model.Add(sum(emp_s1_days) <= 11)
 
                 # Distribusi Adil Shift 3 (Malam)
                 for i in range(num_karyawan):
@@ -369,28 +369,34 @@ if uploaded_file is not None:
                             else:
                                 cell.value = "OFF"; cell.fill = fill_off; cell.font = font_off
 
-                    # --- METADATA SHIFT DAN EMAIL AGENT ---
+                    # =====================================================================
+                    # PERBAIKAN LOGIKA 2 & 3: PENULISAN TABEL METADATA DAN EMAIL YANG FIX
+                    # =====================================================================
                     start_row_meta = 14  
                     
+                    # --- TABEL 1: REFERENSI JAM SHIFT WAKTU (KOLOM A - D) ---
                     meta_shift_headers = ["Shift", "Waktu Masuk", "Waktu Pulang", "Status"]
                     meta_shift_data = [
                         ["1", "07.00", "16.00", "Kerja"],
                         ["2", "14.00", "23.00", "Kerja"],
                         ["3", "22.30", "07.30", "Kerja"],
-                        ["OFF", "(Kosong)", "(Kosong)", "Libur"],
-                        ["CUTI", "(Kosong)", "(Kosong)", "Cuti"]
+                        ["OFF", " ", " ", "Libur"],  # PERBAIKAN 2: Mengubah (kosong) menjadi " "
+                        ["CUTI", " ", " ", "Cuti"]   # PERBAIKAN 2: Mengubah (kosong) menjadi " "
                     ]
                     
+                    # Tulis Header Shift
                     for col_idx, h_text in enumerate(meta_shift_headers, start=1):
                         cell = ws.cell(row=start_row_meta, column=col_idx, value=h_text)
                         cell.font = font_header; cell.fill = fill_header; cell.alignment = Alignment(horizontal="center"); cell.border = thin_border
                         
+                    # Tulis Isi Data Shift
                     for r_idx, row_content in enumerate(meta_shift_data, start=start_row_meta + 1):
                         for c_idx, val in enumerate(row_content, start=1):
                             cell = ws.cell(row=r_idx, column=c_idx, value=val)
                             cell.font = Font(name="Calibri", size=11); cell.border = thin_border; cell.alignment = Alignment(horizontal="center" if c_idx > 1 else "left")
 
-                    start_col_email = 7  
+                    # --- TABEL 2: DAFTAR EMAIL AGENT FIX (KOLOM G - H / JARAK 2 KOLOM KOSONG) ---
+                    start_col_email = 7  # Kolom G
                     meta_email_headers = ["Nama", "Email"]
                     meta_email_data = [
                         ["Jasmine Al-Rosamund", "jasmine.rosamund@alto.id"],
@@ -402,11 +408,21 @@ if uploaded_file is not None:
                         ["Saut Parsaulian", "saut@alto.id"]
                     ]
                     
+                    # Tulis Header Email Fix
                     for col_idx, h_text in enumerate(meta_email_headers, start=start_col_email):
-                        for c_idx, val in enumerate(row_content, start=start_col_email):
-                            cell = ws.cell(row=r_idx, column=c_idx, value=val)
-                            cell.font = Font(name="Calibri", size=11); cell.border = thin_border; cell.alignment = Alignment(horizontal="left")
+                        cell = ws.cell(row=start_row_meta, column=col_idx, value=h_text)
+                        cell.font = font_header; cell.fill = fill_header; cell.border = thin_border
+                        cell.alignment = Alignment(horizontal="center" if col_idx > start_col_email else "left")
+                        
+                    # PERBAIKAN LOGIKA 3: Loop dipisahkan secara independen agar tabel email sukses tercetak sempurna
+                    for email_r_idx, email_row_content in enumerate(meta_email_data, start=start_row_meta + 1):
+                        cell_nama = ws.cell(row=email_r_idx, column=start_col_email, value=email_row_content[0])
+                        cell_nama.font = Font(name="Calibri", size=11); cell_nama.border = thin_border; cell_nama.alignment = Alignment(horizontal="left")
+                        
+                        cell_mail = ws.cell(row=email_r_idx, column=start_col_email + 1, value=email_row_content[1])
+                        cell_mail.font = Font(name="Calibri", size=11); cell_mail.border = thin_border; cell_mail.alignment = Alignment(horizontal="left")
 
+                    # Atur Lebar Kolom
                     for col in ws.columns:
                         max_len = max(len(str(cell.value or '')) for cell in col)
                         col_letter = get_column_letter(col[0].column)
