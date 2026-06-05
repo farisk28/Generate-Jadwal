@@ -132,17 +132,12 @@ if uploaded_file is not None:
                 for i in range(num_karyawan):
                     model.Add(sum(is_off_matrix[i, d] for d in range(num_hari)) == total_off_wajib)
 
-                # =====================================================================
                 # REVISI REQ 1: SELESAI SHIFT 3 SELAMA 3 HARI BERTURUT-TURUT WAJIB LIBUR (OFF)
-                # =====================================================================
                 for i in range(num_karyawan):
-                    # Gabungkan riwayat 3 hari terakhir bulan lalu dengan variabel bulan ini
                     full_s3_timeline = [1 if c == 3 else 0 for c in riwayat_mei_seminggu[i][-3:]] + [is_s3_matrix[i, d] for d in range(num_hari)]
                     full_off_timeline = [1 if c == 0 else 0 for c in riwayat_mei_seminggu[i][-3:]] + [is_off_matrix[i, d] for d in range(num_hari)]
                     
-                    # Lakukan scanning jendela rolling window sepanjang 4 hari berurutan
                     for start_idx in range(len(full_s3_timeline) - 3):
-                        # Jika hari ke-1, ke-2, dan ke-3 adalah Shift 3, maka hari ke-4 WAJIB bernilai 1 pada matriks OFF (Libur)
                         day1_s3 = full_s3_timeline[start_idx]
                         day2_s3 = full_s3_timeline[start_idx + 1]
                         day3_s3 = full_s3_timeline[start_idx + 2]
@@ -152,7 +147,6 @@ if uploaded_file is not None:
                         model.AddBoolAnd([day1_s3, day2_s3, day3_s3]).OnlyEnforceIf(condition_trigger)
                         model.AddBoolOr([day1_s3.Not(), day2_s3.Not(), day3_s3.Not()]).OnlyEnforceIf(condition_trigger.Not())
                         
-                        # Terapkan aturan mutlak jika trigger aktif
                         model.Add(day4_off == 1).OnlyEnforceIf(condition_trigger)
 
                 # =====================================================================
@@ -225,6 +219,8 @@ if uploaded_file is not None:
                 # =====================================================================
                 # ATURAN OPERASIONAL SHIFT DAN REGULASI KARYAWAN
                 # =====================================================================
+                saut_alone_weekdays = []  # FIX: Inisialisasi list di luar loop agar aman dan terbaca
+                
                 for d in range(num_hari):
                     if saut_idx != -1:
                         model.Add(x[saut_idx, d] != 2)
@@ -248,7 +244,27 @@ if uploaded_file is not None:
                             saut_disini = model.NewBoolVar(f'saut_is_at_s_{s}_d_{d}')
                             model.Add(x[saut_idx, d] == s).OnlyEnforceIf(saut_disini)
                             model.Add(x[saut_idx, d] != s).OnlyEnforceIf(saut_disini.Not())
-                            model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_disini)
+                            
+                            # FIX LOGIKA: Perbaikan deteksi weekends vs weekdays agar bebas dari bug 'Not' attribute
+                            if s == 2:
+                                model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_disini)
+                            elif s == 1:
+                                s1_is_one = model.NewBoolVar(f's1_is_one_d_{d}')
+                                model.Add(sum(is_in_shift) == 1).OnlyEnforceIf(s1_is_one)
+                                model.Add(sum(is_in_shift) != 1).OnlyEnforceIf(s1_is_one.Not())
+                                
+                                saut_sendirian = model.NewBoolVar(f'saut_alone_s1_d_{d}')
+                                model.AddBoolAnd([saut_disini, s1_is_one]).OnlyEnforceIf(saut_sendirian)
+                                model.AddBoolOr([saut_disini.Not(), s1_is_one.Not()]).OnlyEnforceIf(saut_sendirian.Not())
+                                
+                                if hari_ke_nama[d] in ['Sabtu', 'Minggu']:
+                                    model.Add(saut_sendirian == 0) # Weekend mutlak tidak boleh sendirian
+                                else:
+                                    saut_alone_weekdays.append(saut_sendirian)
+
+                # Kunci jatah maksimal sendirian Saut di weekdays sebulan
+                if saut_idx != -1 and len(saut_alone_weekdays) > 0:
+                    model.Add(sum(saut_alone_weekdays) <= 4)
 
                 # MAKSIMAL 5 HARI KERJA BERTURUT-TURUT LINTAS BATAS BULAN
                 for i in range(num_karyawan):
@@ -289,8 +305,8 @@ if uploaded_file is not None:
                         emp_s1_days.append(is_s1)
                     
                     if i == saut_idx and saut_idx != -1:
-                        model.Add(sum(emp_s1_days) >= 12) # Kunci jatah bawah minimal 12 hari
-                        model.Add(sum(emp_s1_days) <= 18) # REVISI: Maksimal diperluas ke 18 hari
+                        model.Add(sum(emp_s1_days) >= 12) 
+                        model.Add(sum(emp_s1_days) <= 18) 
                     else:
                         model.Add(sum(emp_s1_days) >= 1)
                         model.Add(sum(emp_s1_days) <= 10)
