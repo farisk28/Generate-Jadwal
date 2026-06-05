@@ -108,7 +108,7 @@ if uploaded_file is not None:
                         else:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2, 3]), f'x_{i}_{d}')
 
-                # MATRIKS UTAMA VARIABEL BOOLEAN (GARANSI AMAN DARI ERROR TYPE)
+                # MATRIKS UTAMA VARIABEL INDIKATOR BOOLEAN (GARANSI AMAN DARI ERROR TYPE)
                 is_off_matrix = {}
                 is_s1_matrix = {}
                 is_s2_matrix = {}
@@ -141,44 +141,21 @@ if uploaded_file is not None:
                 for i in range(num_karyawan):
                     model.Add(sum(is_off_matrix[i, d] for d in range(num_hari)) == total_off_wajib)
 
-                # =====================================================================
-                # FIX LOGIKA: DETEKSI 3 HARI SHIFT 3 BERTURUT-TURUT DAN WAJIB OFF BESOKNYA
-                # =====================================================================
+                # ATURAN KETAT 1: SELESAI SHIFT 3 SELAMA 3 HARI BERTURUT-TURUT WAJIB LIBUR (OFF)
                 for i in range(num_karyawan):
-                    # Ambil data riwayat 3 hari terakhir dari bulan lalu
-                    h_minus3_s3 = 1 if riwayat_mei_seminggu[i][-3] == 3 else 0
-                    h_minus2_s3 = 1 if riwayat_mei_seminggu[i][-2] == 3 else 0
-                    h_minus1_s3 = 1 if riwayat_mei_seminggu[i][-1] == 3 else 0
-
-                    h_minus3_off = 1 if riwayat_mei_seminggu[i][-3] == 0 else 0
-                    h_minus2_off = 1 if riwayat_mei_seminggu[i][-2] == 0 else 0
-                    h_minus1_off = 1 if riwayat_mei_seminggu[i][-1] == 0 else 0
-
-                    # Konversi riwayat bunder menjadi objek variabel OR-Tools agar tipenya seragam saat di-loop
-                    v_m3_s3 = model.NewBoolVar(f'v_m3_s3_{i}'); model.Add(v_m3_s3 == h_minus3_s3)
-                    v_m2_s3 = model.NewBoolVar(f'v_m2_s3_{i}'); model.Add(v_m2_s3 == h_minus2_s3)
-                    v_m1_s3 = model.NewBoolVar(f'v_m1_s3_{i}'); model.Add(v_m1_s3 == h_minus1_s3)
-
-                    v_m3_off = model.NewBoolVar(f'v_m3_off_{i}'); model.Add(v_m3_off == h_minus3_off)
-                    v_m2_off = model.NewBoolVar(f'v_m2_off_{i}'); model.Add(v_m2_off == h_minus2_off)
-                    v_m1_off = model.NewBoolVar(f'v_m1_off_{i}'); model.Add(v_m1_off == h_minus1_off)
-
-                    # Buat timeline biner murni OR-Tools (Bebas dari data int bunder yang memicu bug .Not)
-                    timeline_s3 = [v_m3_s3, v_m2_s3, v_m1_s3] + [is_s3_matrix[i, d] for d in range(num_hari)]
-                    timeline_off = [v_m3_off, v_m2_off, v_m1_off] + [is_off_matrix[i, d] for d in range(num_hari)]
-
-                    for start_idx in range(len(timeline_s3) - 3):
-                        d1_s3 = timeline_s3[start_idx]
-                        d2_s3 = timeline_s3[start_idx + 1]
-                        d3_s3 = timeline_s3[start_idx + 2]
-                        d4_off = timeline_off[start_idx + 3]
-
-                        trigger = model.NewBoolVar(f's3_rolling_trig_{i}_{start_idx}')
-                        model.AddBoolAnd([d1_s3, d2_s3, d3_s3]).OnlyEnforceIf(trigger)
-                        model.AddBoolOr([d1_s3.Not(), d2_s3.Not(), d3_s3.Not()]).OnlyEnforceIf(trigger.Not())
+                    full_s3_timeline = [1 if c == 3 else 0 for c in riwayat_mei_seminggu[i][-3:]] + [is_s3_matrix[i, d] for d in range(num_hari)]
+                    full_off_timeline = [1 if c == 0 else 0 for c in riwayat_mei_seminggu[i][-3:]] + [is_off_matrix[i, d] for d in range(num_hari)]
+                    
+                    for start_idx in range(len(full_s3_timeline) - 3):
+                        day1_s3 = full_s3_timeline[start_idx]
+                        day2_s3 = full_s3_timeline[start_idx + 1]
+                        day3_s3 = full_s3_timeline[start_idx + 2]
+                        day4_off = full_off_timeline[start_idx + 3]
                         
-                        # Jalankan perintah: Hari ke-4 mutlak WAJIB OFF (Libur)
-                        model.Add(d4_off == 1).OnlyEnforceIf(trigger)
+                        trigger = model.NewBoolVar(f's3_3d_trig_{i}_{start_idx}')
+                        model.AddBoolAnd([day1_s3, day2_s3, day3_s3]).OnlyEnforceIf(trigger)
+                        model.AddBoolOr([day1_s3.Not(), day2_s3.Not(), day3_s3.Not()]).OnlyEnforceIf(trigger.Not())
+                        model.Add(day4_off == 1).OnlyEnforceIf(trigger)
 
                 # OPTIMASI PRIORITAS BERBOBOT (SOFT CONSTRAINTS)
                 # Target A: Menggandengkan Hari Libur Berturut-turut
@@ -280,15 +257,26 @@ if uploaded_file is not None:
                         window = all_work_offs[start_day : start_day + 6]
                         model.Add(sum(window) >= 1)
 
-                # TRANSISI ISTIRAHAT PASCA SHIFT 3 (MURNI BOOLEAN)
+                # =====================================================================
+                # REVISI REQ BARU: ATURAN TRANSISI ALUR SHIFT HARIAN (MUTLAK BERURUTAN)
+                # =====================================================================
                 for i in range(num_karyawan):
-                    last_mei = riwayat_mei_seminggu[i][-1]
-                    if last_mei == 3:
-                        model.AddAllowedAssignments([x[i, 0]], [[0], [3]])
-                    elif last_mei == 2:
-                        model.Add(x[i, 0] != 1)
-                        
+                    # --- Sambungan Hari Terakhir Bulan Lalu ke Tanggal 1 Bulan Baru ---
+                    last_mei_shift = riwayat_mei_seminggu[i][-1]
+                    if last_mei_shift == 3:
+                        # Pasca Shift 3: Hanya boleh OFF (0) atau Shift 3 lagi (3) -> Dilarang Shift 1 & 2
+                        model.Add(is_s1_matrix[i, 0] == 0)
+                        model.Add(is_s2_matrix[i, 0] == 0)
+                    elif last_mei_shift == 2:
+                        # Pasca Shift 2: Hanya boleh OFF (0), Shift 2, atau Shift 3 -> Dilarang Shift 1
+                        model.Add(is_s1_matrix[i, 0] == 0)
+                    
+                    # --- Atur Transisi Harian di Dalam Bulan Berjalan ---
                     for d in range(num_hari - 1):
+                        # Aturan 2: Kalau hari ini Shift 2, besoknya TIDAK BISA Shift 1
+                        model.Add(is_s1_matrix[i, d+1] == 0).OnlyEnforceIf(is_s2_matrix[i, d])
+                        
+                        # Aturan 3: Kalau hari ini Shift 3, besoknya CUMA BISA Shift 3 atau OFF (Dilarang Shift 1 & Shift 2)
                         model.Add(is_s1_matrix[i, d+1] == 0).OnlyEnforceIf(is_s3_matrix[i, d])
                         model.Add(is_s2_matrix[i, d+1] == 0).OnlyEnforceIf(is_s3_matrix[i, d])
 
