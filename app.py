@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit st
 import pandas as pd
 import numpy as np
 from ortools.sat.python import cp_model
@@ -223,7 +223,7 @@ if uploaded_file is not None:
                 
                 for d in range(num_hari):
                     if saut_idx != -1:
-                        model.Add(x[saut_idx, d] != 2)
+                        model.Add(x[saut_idx, d] != 2) # Saut tidak boleh ada di Shift 2
 
                     for s in [1, 2, 3]:
                         is_in_shift = []
@@ -248,6 +248,7 @@ if uploaded_file is not None:
                             if s == 2:
                                 model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_disini)
                             elif s == 1:
+                                # RESTRUKTURISASI AMAN: Cek apakah total orang di Shift 1 harian cuma 1 orang
                                 s1_is_one = model.NewBoolVar(f's1_is_one_d_{d}')
                                 model.Add(sum(is_in_shift) == 1).OnlyEnforceIf(s1_is_one)
                                 model.Add(sum(is_in_shift) != 1).OnlyEnforceIf(s1_is_one.Not())
@@ -257,7 +258,7 @@ if uploaded_file is not None:
                                 model.AddBoolOr([saut_disini.Not(), s1_is_one.Not()]).OnlyEnforceIf(saut_sendirian.Not())
                                 
                                 if hari_ke_nama[d] in ['Sabtu', 'Minggu']:
-                                    model.Add(saut_sendirian == 0) 
+                                    model.Add(saut_sendirian == 0) # Weekend dilarang keras sendirian
                                 else:
                                     saut_alone_weekdays.append(saut_sendirian)
 
@@ -293,7 +294,7 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 2).OnlyEnforceIf(is_shift2.Not())
                         model.Add(x[i, d+1] != 1).OnlyEnforceIf(is_shift2)
 
-                # REVISI REQ 2: Kunci Jatah Total Shift 1 Saut Minimal 12 dan Maksimal 18 Hari
+                # Kunci Jatah Total Shift 1 Saut Minimal 12 dan Maksimal 18 Hari
                 for i in range(num_karyawan):
                     emp_s1_days = []
                     for d in range(num_hari):
@@ -460,7 +461,7 @@ if uploaded_file is not None:
                         cell.font = font_header; cell.fill = fill_header; cell.border = thin_border
                         cell.alignment = Alignment(horizontal="center" if col_idx > start_col_email else "left")
                         
-                    # FIX PERBAIKAN UTAMA: Variabel diubah menjadi email_row_content secara konsisten untuk mencegah konflik tipe data
+                    # DATA INDEPENDEN EMAIL AGENT (SANGAT AMAN)
                     for email_r_idx, email_row_content in enumerate(meta_email_data, start=start_row_meta + 1):
                         cell_nama = ws.cell(row=email_r_idx, column=start_col_email, value=email_row_content[0])
                         cell_nama.font = Font(name="Calibri", size=11); cell_nama.border = thin_border; cell_nama.alignment = Alignment(horizontal="left")
