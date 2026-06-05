@@ -219,7 +219,7 @@ if uploaded_file is not None:
                 # =====================================================================
                 # ATURAN OPERASIONAL SHIFT DAN REGULASI KARYAWAN
                 # =====================================================================
-                saut_alone_weekdays = []  # FIX: Inisialisasi list di luar loop agar aman dan terbaca
+                saut_alone_weekdays = []  
                 
                 for d in range(num_hari):
                     if saut_idx != -1:
@@ -245,7 +245,6 @@ if uploaded_file is not None:
                             model.Add(x[saut_idx, d] == s).OnlyEnforceIf(saut_disini)
                             model.Add(x[saut_idx, d] != s).OnlyEnforceIf(saut_disini.Not())
                             
-                            # FIX LOGIKA: Perbaikan deteksi weekends vs weekdays agar bebas dari bug 'Not' attribute
                             if s == 2:
                                 model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_disini)
                             elif s == 1:
@@ -258,11 +257,10 @@ if uploaded_file is not None:
                                 model.AddBoolOr([saut_disini.Not(), s1_is_one.Not()]).OnlyEnforceIf(saut_sendirian.Not())
                                 
                                 if hari_ke_nama[d] in ['Sabtu', 'Minggu']:
-                                    model.Add(saut_sendirian == 0) # Weekend mutlak tidak boleh sendirian
+                                    model.Add(saut_sendirian == 0) 
                                 else:
                                     saut_alone_weekdays.append(saut_sendirian)
 
-                # Kunci jatah maksimal sendirian Saut di weekdays sebulan
                 if saut_idx != -1 and len(saut_alone_weekdays) > 0:
                     model.Add(sum(saut_alone_weekdays) <= 4)
 
@@ -462,6 +460,7 @@ if uploaded_file is not None:
                         cell.font = font_header; cell.fill = fill_header; cell.border = thin_border
                         cell.alignment = Alignment(horizontal="center" if col_idx > start_col_email else "left")
                         
+                    # FIX PERBAIKAN UTAMA: Variabel diubah menjadi email_row_content secara konsisten untuk mencegah konflik tipe data
                     for email_r_idx, email_row_content in enumerate(meta_email_data, start=start_row_meta + 1):
                         cell_nama = ws.cell(row=email_r_idx, column=start_col_email, value=email_row_content[0])
                         cell_nama.font = Font(name="Calibri", size=11); cell_nama.border = thin_border; cell_nama.alignment = Alignment(horizontal="left")
