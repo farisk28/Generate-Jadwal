@@ -108,15 +108,28 @@ if uploaded_file is not None:
                         else:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2, 3]), f'x_{i}_{d}')
 
-                # MATRIKS KUNCI PENANDA STATUS HARI (MURNI BOOLEAN UNTUK MENCEGAH BUG TYPE)
+                # MATRIKS UTAMA VARIABEL INDIKATOR BOOLEAN (ANTI-BUG TYPE)
                 is_off_matrix = {}
+                is_s1_matrix = {}
+                is_s2_matrix = {}
                 is_s3_matrix = {}
+                
                 for i in range(num_karyawan):
                     for d in range(num_hari):
                         is_off = model.NewBoolVar(f'is_off_{i}_{d}')
                         model.Add(x[i, d] == 0).OnlyEnforceIf(is_off)
                         model.Add(x[i, d] != 0).OnlyEnforceIf(is_off.Not())
                         is_off_matrix[i, d] = is_off
+
+                        is_s1 = model.NewBoolVar(f'is_s1_{i}_{d}')
+                        model.Add(x[i, d] == 1).OnlyEnforceIf(is_s1)
+                        model.Add(x[i, d] != 1).OnlyEnforceIf(is_s1.Not())
+                        is_s1_matrix[i, d] = is_s1
+
+                        is_s2 = model.NewBoolVar(f'is_s2_{i}_{d}')
+                        model.Add(x[i, d] == 2).OnlyEnforceIf(is_s2)
+                        model.Add(x[i, d] != 2).OnlyEnforceIf(is_s2.Not())
+                        is_s2_matrix[i, d] = is_s2
 
                         is_s3 = model.NewBoolVar(f'is_s3_{i}_{d}')
                         model.Add(x[i, d] == 3).OnlyEnforceIf(is_s3)
@@ -128,7 +141,7 @@ if uploaded_file is not None:
                 for i in range(num_karyawan):
                     model.Add(sum(is_off_matrix[i, d] for d in range(num_hari)) == total_off_wajib)
 
-                # ATURAN 1: SELESAI SHIFT 3 SELAMA 3 HARI BERTURUT-TURUT WAJIB LIBUR (OFF)
+                # ATURAN KETAT 1: SELESAI SHIFT 3 SELAMA 3 HARI BERTURUT-TURUT WAJIB LIBUR (OFF)
                 for i in range(num_karyawan):
                     full_s3_timeline = [1 if c == 3 else 0 for c in riwayat_mei_seminggu[i][-3:]] + [is_s3_matrix[i, d] for d in range(num_hari)]
                     full_off_timeline = [1 if c == 0 else 0 for c in riwayat_mei_seminggu[i][-3:]] + [is_off_matrix[i, d] for d in range(num_hari)]
@@ -206,15 +219,14 @@ if uploaded_file is not None:
                 # =====================================================================
                 for d in range(num_hari):
                     if saut_idx != -1:
-                        model.Add(x[saut_idx, d] != 2) # Saut dilarang keras Shift 2
+                        model.Add(is_s2_matrix[saut_idx, d] == 0) # Saut dilarang keras Shift 2
 
                     for s in [1, 2, 3]:
                         is_in_shift = []
                         for i in range(num_karyawan):
-                            in_shift = model.NewBoolVar(f's_{s}_i_{i}_d_{d}')
-                            model.Add(x[i, d] == s).OnlyEnforceIf(in_shift)
-                            model.Add(x[i, d] != s).OnlyEnforceIf(in_shift.Not())
-                            is_in_shift.append(in_shift)
+                            if s == 1: is_in_shift.append(is_s1_matrix[i, d])
+                            elif s == 2: is_in_shift.append(is_s2_matrix[i, d])
+                            elif s == 3: is_in_shift.append(is_s3_matrix[i, d])
                         
                         if s == 3:
                             model.Add(sum(is_in_shift) == 2) # Shift 3 wajib tepat berdua
@@ -223,26 +235,18 @@ if uploaded_file is not None:
                             model.Add(sum(is_in_shift) <= 3)
 
                         if saut_idx != -1:
-                            saut_disini = model.NewBoolVar(f'saut_disini_{s}_{d}')
-                            model.Add(x[saut_idx, d] == s).OnlyEnforceIf(saut_disini)
-                            model.Add(x[saut_idx, d] != s).OnlyEnforceIf(saut_disini.Not())
-                            model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_disini) # Saut wajib berdua
+                            saut_disini = is_s1_matrix[saut_idx, d] if s == 1 else (is_s2_matrix[saut_idx, d] if s == 2 else is_s3_matrix[saut_idx, d])
+                            model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_disini) # Jika Saut masuk, shift tersebut wajib diisi 2 orang
 
                 # KUNCI PROPORSI SHIFT 1 SAUT (MINIMAL 12 HARI - MAKSIMAL 18 HARI)
+                if saut_idx != -1:
+                    model.Add(sum(is_s1_matrix[saut_idx, d] for d in range(num_hari)) >= 12)
+                    model.Add(sum(is_s1_matrix[saut_idx, d] for d in range(num_hari)) <= 18)
+                
                 for i in range(num_karyawan):
-                    emp_s1_days = []
-                    for d in range(num_hari):
-                        is_s1 = model.NewBoolVar(f's1_count_{i}_{d}')
-                        model.Add(x[i, d] == 1).OnlyEnforceIf(is_s1)
-                        model.Add(x[i, d] != 1).OnlyEnforceIf(is_s1.Not())
-                        emp_s1_days.append(is_s1)
-                    
-                    if i == saut_idx and saut_idx != -1:
-                        model.Add(sum(emp_s1_days) >= 12) 
-                        model.Add(sum(emp_s1_days) <= 18) 
-                    else:
-                        model.Add(sum(emp_s1_days) >= 1)
-                        model.Add(sum(emp_s1_days) <= 10)
+                    if i != saut_idx:
+                        model.Add(sum(is_s1_matrix[i, d] for d in range(num_hari)) >= 1)
+                        model.Add(sum(is_s1_matrix[i, d] for d in range(num_hari)) <= 10)
 
                 # ATURAN 2: MAKSIMAL 5 HARI KERJA BERTURUT-TURUT LINTAS BATAS BULAN
                 for i in range(num_karyawan):
@@ -253,36 +257,28 @@ if uploaded_file is not None:
                         window = all_work_offs[start_day : start_day + 6]
                         model.Add(sum(window) >= 1)
 
-                # FIX TRANFORMATIF: Transisi Istirahat Pasca Shift 3 (Bebas Bug 'Not' murni)
+                # PERBAIKAN TOTAL SINTAKS: Transisi Istirahat Pasca Shift 3 (Bebas Bug 'Not' Selamanya)
                 for i in range(num_karyawan):
                     last_mei = riwayat_mei_seminggu[i][-1]
                     if last_mei == 3:
-                        # Jika hari terakhir Mei adalah Shift 3, maka tanggal 1 Juni hanya boleh OFF atau Shift 3 lagi
                         model.AddAllowedAssignments([x[i, 0]], [[0], [3]])
                     elif last_mei == 2:
                         model.Add(x[i, 0] != 1)
                         
                     for d in range(num_hari - 1):
-                        # Jika hari ini Shift 3, besoknya dilarang keras mengambil Shift 1 atau Shift 2 (Hanya boleh OFF atau Shift 3)
-                        model.Add(x[i, d+1] != 1).OnlyEnforceIf(is_s3_matrix[i, d])
-                        model.Add(x[i, d+1] != 2).OnlyEnforceIf(is_s3_matrix[i, d])
+                        # Menggunakan matriks boolean murni untuk mengunci transisi pasca shift 3 (hari esok tidak boleh shift 1 atau shift 2)
+                        model.Add(is_s1_matrix[i, d+1] == 0).OnlyEnforceIf(is_s3_matrix[i, d])
+                        model.Add(is_s2_matrix[i, d+1] == 0).OnlyEnforceIf(is_s3_matrix[i, d])
 
                 # DISTRIBUSI ADIL SHIFT 3 (MALAM)
                 for i in range(num_karyawan):
                     if i != 0:
-                        emp_s3_days = []
-                        for d in range(num_hari):
-                            is_s3 = model.NewBoolVar(f'fair_s3_{i}_{d}')
-                            model.Add(x[i, d] == 3).OnlyEnforceIf(is_s3)
-                            model.Add(x[i, d] != 3).OnlyEnforceIf(is_s3.Not())
-                            emp_s3_days.append(is_s3)
-                        
                         if i == saut_idx:
-                            model.Add(sum(emp_s3_days) >= 1)
-                            model.Add(sum(emp_s3_days) <= 5)
+                            model.Add(sum(is_s3_matrix[i, d] for d in range(num_hari)) >= 1)
+                            model.Add(sum(is_s3_matrix[i, d] for d in range(num_hari)) <= 5)
                         else:
-                            model.Add(sum(emp_s3_days) >= 8)
-                            model.Add(sum(emp_s3_days) <= 14)
+                            model.Add(sum(is_s3_matrix[i, d] for d in range(num_hari)) >= 8)
+                            model.Add(sum(is_s3_matrix[i, d] for d in range(num_hari)) <= 14)
 
                 # Eksekusi Solver
                 solver = cp_model.CpSolver()
@@ -378,7 +374,7 @@ if uploaded_file is not None:
                             else:
                                 cell.value = "OFF"; cell.fill = fill_off; cell.font = font_off
 
-                    # --- METADATA SHIFT DAN EMAIL AGENT ---
+                    # --- METADATA TABEL REFERENSI BAWAH ---
                     start_row_meta = 14  
                     
                     # TABEL 1: Referensi Shift Waktu (Kolom A-D)
