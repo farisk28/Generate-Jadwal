@@ -108,14 +108,20 @@ if uploaded_file is not None:
                         else:
                             x[i, d] = model.NewIntVarFromDomain(cp_model.Domain.FromValues([0, 1, 2, 3]), f'x_{i}_{d}')
 
-                # MATRIKS KUNCI PENANDA HARI LIBUR
+                # MATRIKS KUNCI PENANDA HARI LIBUR & PENANDA SHIFT 3
                 is_off_matrix = {}
+                is_s3_matrix = {}
                 for i in range(num_karyawan):
                     for d in range(num_hari):
                         is_off = model.NewBoolVar(f'is_off_matrix_{i}_{d}')
                         model.Add(x[i, d] == 0).OnlyEnforceIf(is_off)
                         model.Add(x[i, d] != 0).OnlyEnforceIf(is_off.Not())
                         is_off_matrix[i, d] = is_off
+
+                        is_s3 = model.NewBoolVar(f'is_s3_matrix_{i}_{d}')
+                        model.Add(x[i, d] == 3).OnlyEnforceIf(is_s3)
+                        model.Add(x[i, d] != 3).OnlyEnforceIf(is_s3.Not())
+                        is_s3_matrix[i, d] = is_s3
 
                 # KETENTUAN 1: Jatah Libur Bulanan Mutlak (28-30 hari = 8 OFF, 31 hari = 9 OFF)
                 if num_hari in [28, 29, 30]:
@@ -127,9 +133,32 @@ if uploaded_file is not None:
                     model.Add(sum(is_off_matrix[i, d] for d in range(num_hari)) == total_off_wajib)
 
                 # =====================================================================
+                # REVISI REQ 1: SELESAI SHIFT 3 SELAMA 3 HARI BERTURUT-TURUT WAJIB LIBUR (OFF)
+                # =====================================================================
+                for i in range(num_karyawan):
+                    # Gabungkan riwayat 3 hari terakhir bulan lalu dengan variabel bulan ini
+                    full_s3_timeline = [1 if c == 3 else 0 for c in riwayat_mei_seminggu[i][-3:]] + [is_s3_matrix[i, d] for d in range(num_hari)]
+                    full_off_timeline = [1 if c == 0 else 0 for c in riwayat_mei_seminggu[i][-3:]] + [is_off_matrix[i, d] for d in range(num_hari)]
+                    
+                    # Lakukan scanning jendela rolling window sepanjang 4 hari berurutan
+                    for start_idx in range(len(full_s3_timeline) - 3):
+                        # Jika hari ke-1, ke-2, dan ke-3 adalah Shift 3, maka hari ke-4 WAJIB bernilai 1 pada matriks OFF (Libur)
+                        day1_s3 = full_s3_timeline[start_idx]
+                        day2_s3 = full_s3_timeline[start_idx + 1]
+                        day3_s3 = full_s3_timeline[start_idx + 2]
+                        day4_off = full_off_timeline[start_idx + 3]
+                        
+                        condition_trigger = model.NewBoolVar(f's3_3days_trigger_i_{i}_idx_{start_idx}')
+                        model.AddBoolAnd([day1_s3, day2_s3, day3_s3]).OnlyEnforceIf(condition_trigger)
+                        model.AddBoolOr([day1_s3.Not(), day2_s3.Not(), day3_s3.Not()]).OnlyEnforceIf(condition_trigger.Not())
+                        
+                        # Terapkan aturan mutlak jika trigger aktif
+                        model.Add(day4_off == 1).OnlyEnforceIf(condition_trigger)
+
+                # =====================================================================
                 # OPTIMASI PRIORITAS BERBOBOT (SOFT CONSTRAINTS)
                 # =====================================================================
-                # KETENTUAN 1 (SOFT): Sebisa Mungkin Libur Dibuat Berturut-turut
+                # KETENTUAN (SOFT): Sebisa Mungkin Libur Dibuat Berturut-turut
                 consec_off_vars = []
                 for i in range(num_karyawan):
                     for d in range(num_hari - 1):
@@ -138,8 +167,9 @@ if uploaded_file is not None:
                         model.AddBoolOr([is_off_matrix[i, d].Not(), is_off_matrix[i, d+1].Not()]).OnlyEnforceIf(pair_consec.Not())
                         consec_off_vars.append(pair_consec)
 
-                # KETENTUAN 2 (SOFT): Target Ideal Mengejar 2 Hari Libur per Minggu Penuh
+                # KETENTUAN (SOFT): Target Ideal Mengejar 2 Hari Libur per Minggu Penuh
                 week_per_emp_ideal = []
+                saut_friday_s3_vars = [] 
                 riwayat_off_bulan_lalu = {}
                 for i in range(num_karyawan):
                     riwayat_off_bulan_lalu[i] = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i]]
@@ -154,7 +184,7 @@ if uploaded_file is not None:
                         weeks.append(current_week)
                         current_week = []
 
-                # PENYUSUNAN BATASAN LIBUR MINGGUAN DINAMIS (ANTI-DEADLOCK)
+                # PENYUSUNAN BATASAN LIBUR MINGGUAN DINAMIS
                 for idx_w, week in enumerate(weeks):
                     if idx_w == 0 and jumlah_hari_bulan_lalu_di_minggu_awal > 0:
                         for i in range(num_karyawan):
@@ -184,13 +214,21 @@ if uploaded_file is not None:
                             model.Add(sum(is_off_matrix[i, d] for d in week) >= 0)
                             model.Add(sum(is_off_matrix[i, d] for d in week) <= 2)
 
+                if saut_idx != -1:
+                    for d in range(num_hari):
+                        if hari_ke_nama[d] == 'Jumat':
+                            saut_friday_s3_vars.append(is_s3_matrix[saut_idx, d])
+
                 # Jalankan fungsi maksimisasi poin bobot jadwal ideal
-                model.Maximize(10 * sum(week_per_emp_ideal) + 5 * sum(consec_off_vars))
+                model.Maximize(10 * sum(week_per_emp_ideal) + 5 * sum(consec_off_vars) + 15 * sum(saut_friday_s3_vars))
 
                 # =====================================================================
                 # ATURAN OPERASIONAL SHIFT DAN REGULASI KARYAWAN
                 # =====================================================================
                 for d in range(num_hari):
+                    if saut_idx != -1:
+                        model.Add(x[saut_idx, d] != 2)
+
                     for s in [1, 2, 3]:
                         is_in_shift = []
                         for i in range(num_karyawan):
@@ -200,19 +238,19 @@ if uploaded_file is not None:
                             is_in_shift.append(in_shift)
                         
                         if s == 3:
-                            model.Add(sum(is_in_shift) == 2) # Shift 3 mutlak wajib tepat berdua
+                            model.Add(sum(is_in_shift) == 2) 
                         else:
                             model.Add(sum(is_in_shift) >= 1)
                             model.Add(sum(is_in_shift) <= 3)
 
-                        # KETENTUAN 3: Kunci agar Saut WAJIB BERDUA di shift manapun (Tidak boleh sendiri)
+                        # KETENTUAN: Kunci agar Saut WAJIB BERDUA di shift manapun
                         if saut_idx != -1:
                             saut_disini = model.NewBoolVar(f'saut_is_at_s_{s}_d_{d}')
                             model.Add(x[saut_idx, d] == s).OnlyEnforceIf(saut_disini)
                             model.Add(x[saut_idx, d] != s).OnlyEnforceIf(saut_disini.Not())
                             model.Add(sum(is_in_shift) == 2).OnlyEnforceIf(saut_disini)
 
-                # KETENTUAN 5: Maksimal 5 Hari Kerja Berturut-turut Lintas Batas Bulan
+                # MAKSIMAL 5 HARI KERJA BERTURUT-TURUT LINTAS BATAS BULAN
                 for i in range(num_karyawan):
                     prev_work_offs = [1 if s == 0 else 0 for s in riwayat_mei_seminggu[i][-5:]]
                     current_work_offs = [is_off_matrix[i, d] for d in range(num_hari)]
@@ -222,7 +260,7 @@ if uploaded_file is not None:
                         window = all_work_offs[start_day : start_day + 6]
                         model.Add(sum(window) >= 1)
 
-                # Transisi Istirahat Minimal Lintas Bulan (Aturan Off pasca Shift 3)
+                # Transisi Istirahat Minimal Lintas Bulan
                 for i in range(num_karyawan):
                     last_mei = riwayat_mei_seminggu[i][-1]
                     if last_mei == 3:
@@ -241,7 +279,7 @@ if uploaded_file is not None:
                         model.Add(x[i, d] != 2).OnlyEnforceIf(is_shift2.Not())
                         model.Add(x[i, d+1] != 1).OnlyEnforceIf(is_shift2)
 
-                # PERBAIKAN LOGIKA 1: Kunci Jatah Total Shift 1 Saut (Minimal 10 dan Maksimal 15)
+                # REVISI REQ 2: Kunci Jatah Total Shift 1 Saut Minimal 12 dan Maksimal 18 Hari
                 for i in range(num_karyawan):
                     emp_s1_days = []
                     for d in range(num_hari):
@@ -251,11 +289,11 @@ if uploaded_file is not None:
                         emp_s1_days.append(is_s1)
                     
                     if i == saut_idx and saut_idx != -1:
-                        model.Add(sum(emp_s1_days) >= 10) # Minimal diubah menjadi 10 hari sesuai permintaan baru
-                        model.Add(sum(emp_s1_days) <= 15) # Maksimal tepat 15 kali sebulan
+                        model.Add(sum(emp_s1_days) >= 12) # Kunci jatah bawah minimal 12 hari
+                        model.Add(sum(emp_s1_days) <= 18) # REVISI: Maksimal diperluas ke 18 hari
                     else:
                         model.Add(sum(emp_s1_days) >= 1)
-                        model.Add(sum(emp_s1_days) <= 11)
+                        model.Add(sum(emp_s1_days) <= 10)
 
                 # Distribusi Adil Shift 3 (Malam)
                 for i in range(num_karyawan):
@@ -306,8 +344,7 @@ if uploaded_file is not None:
                     headers_kiri = ["Nama", "Layer", "Shift 1", "Shift 2", "Shift 3", "Libur", "Kerja", ""]
                     for col_idx, text in enumerate(headers_kiri, start=1):
                         cell = ws.cell(row=2, column=col_idx, value=text)
-                        cell.font = font_header
-                        cell.fill = fill_header
+                        cell.font = font_header; cell.fill = fill_header
 
                     for col_idx, text in enumerate(["Shift 1", "Shift 2", "Shift 3", "Libur", "Kerja"], start=3):
                         ws.cell(row=3, column=col_idx, value=text).font = font_header
@@ -369,34 +406,30 @@ if uploaded_file is not None:
                             else:
                                 cell.value = "OFF"; cell.fill = fill_off; cell.font = font_off
 
-                    # =====================================================================
-                    # PERBAIKAN LOGIKA 2 & 3: PENULISAN TABEL METADATA DAN EMAIL YANG FIX
-                    # =====================================================================
+                    # --- METADATA SHIFT DAN EMAIL AGENT ---
                     start_row_meta = 14  
                     
-                    # --- TABEL 1: REFERENSI JAM SHIFT WAKTU (KOLOM A - D) ---
+                    # TABEL 1: Referensi Shift Waktu (Kolom A-D)
                     meta_shift_headers = ["Shift", "Waktu Masuk", "Waktu Pulang", "Status"]
                     meta_shift_data = [
                         ["1", "07.00", "16.00", "Kerja"],
                         ["2", "14.00", "23.00", "Kerja"],
                         ["3", "22.30", "07.30", "Kerja"],
-                        ["OFF", " ", " ", "Libur"],  # PERBAIKAN 2: Mengubah (kosong) menjadi " "
-                        ["CUTI", " ", " ", "Cuti"]   # PERBAIKAN 2: Mengubah (kosong) menjadi " "
+                        ["OFF", " ", " ", "Libur"],  
+                        ["CUTI", " ", " ", "Cuti"]   
                     ]
                     
-                    # Tulis Header Shift
                     for col_idx, h_text in enumerate(meta_shift_headers, start=1):
                         cell = ws.cell(row=start_row_meta, column=col_idx, value=h_text)
                         cell.font = font_header; cell.fill = fill_header; cell.alignment = Alignment(horizontal="center"); cell.border = thin_border
                         
-                    # Tulis Isi Data Shift
                     for r_idx, row_content in enumerate(meta_shift_data, start=start_row_meta + 1):
                         for c_idx, val in enumerate(row_content, start=1):
                             cell = ws.cell(row=r_idx, column=c_idx, value=val)
                             cell.font = Font(name="Calibri", size=11); cell.border = thin_border; cell.alignment = Alignment(horizontal="center" if c_idx > 1 else "left")
 
-                    # --- TABEL 2: DAFTAR EMAIL AGENT FIX (KOLOM G - H / JARAK 2 KOLOM KOSONG) ---
-                    start_col_email = 7  # Kolom G
+                    # TABEL 2: Daftar Email Agent Independen (Kolom G-H)
+                    start_col_email = 7  
                     meta_email_headers = ["Nama", "Email"]
                     meta_email_data = [
                         ["Jasmine Al-Rosamund", "jasmine.rosamund@alto.id"],
@@ -408,13 +441,11 @@ if uploaded_file is not None:
                         ["Saut Parsaulian", "saut@alto.id"]
                     ]
                     
-                    # Tulis Header Email Fix
                     for col_idx, h_text in enumerate(meta_email_headers, start=start_col_email):
                         cell = ws.cell(row=start_row_meta, column=col_idx, value=h_text)
                         cell.font = font_header; cell.fill = fill_header; cell.border = thin_border
                         cell.alignment = Alignment(horizontal="center" if col_idx > start_col_email else "left")
                         
-                    # PERBAIKAN LOGIKA 3: Loop dipisahkan secara independen agar tabel email sukses tercetak sempurna
                     for email_r_idx, email_row_content in enumerate(meta_email_data, start=start_row_meta + 1):
                         cell_nama = ws.cell(row=email_r_idx, column=start_col_email, value=email_row_content[0])
                         cell_nama.font = Font(name="Calibri", size=11); cell_nama.border = thin_border; cell_nama.alignment = Alignment(horizontal="left")
@@ -422,7 +453,6 @@ if uploaded_file is not None:
                         cell_mail = ws.cell(row=email_r_idx, column=start_col_email + 1, value=email_row_content[1])
                         cell_mail.font = Font(name="Calibri", size=11); cell_mail.border = thin_border; cell_mail.alignment = Alignment(horizontal="left")
 
-                    # Atur Lebar Kolom
                     for col in ws.columns:
                         max_len = max(len(str(cell.value or '')) for cell in col)
                         col_letter = get_column_letter(col[0].column)
